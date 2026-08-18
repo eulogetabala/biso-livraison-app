@@ -9,6 +9,8 @@ mutation Login($input: LoginInput!) {
       phone
       role
       avatarUrl
+      createdAt
+      updatedAt
     }
   }
 }

@@ -13,7 +13,7 @@ export type LoginMutationVariables = Exact<{
 }>;
 
 
-export type LoginMutation = { login: { accessToken: string, user: { id: string, email: string, firstName: string, lastName: string, phone: string, role: string, avatarUrl: string | null } } };
+export type LoginMutation = { login: { accessToken: string, user: { id: string, email: string, firstName: string, lastName: string, phone: string, role: string, avatarUrl: string | null, createdAt: string, updatedAt: string } } };
 
 export type RegisterMutationVariables = Exact<{
   input: Types.CreateUserInput;
@@ -70,14 +70,14 @@ export type SearchRestaurantsQueryVariables = Exact<{
 }>;
 
 
-export type SearchRestaurantsQuery = { searchRestaurants: { items: Array<{ id: string, name: string, description: string | null, address: string, city: string, zipCode: string, phone: string, cuisineType: string, imageUrl: string | null, coverImageUrl: string | null, rating: number, deliveryFee: number, estimatedDeliveryTime: number, isActive: boolean }>, pageInfo: { totalItems: number, totalPages: number, currentPage: number, hasNextPage: boolean, hasPreviousPage: boolean } } };
+export type SearchRestaurantsQuery = { searchRestaurants: { items: Array<{ id: string, name: string, description: string | null, address: string, city: string, zipCode: string, phone: string, cuisineType: string, imageUrl: string | null, coverImageUrl: string | null, rating: number, deliveryFee: number, estimatedDeliveryTime: number, isActive: boolean, createdAt: string, updatedAt: string }>, pageInfo: { totalItems: number, totalPages: number, currentPage: number, hasNextPage: boolean, hasPreviousPage: boolean } } };
 
 export type RestaurantQueryVariables = Exact<{
   id: string | number;
 }>;
 
 
-export type RestaurantQuery = { restaurant: { id: string, name: string, description: string | null, address: string, city: string, zipCode: string, phone: string, cuisineType: string, imageUrl: string | null, coverImageUrl: string | null, rating: number, deliveryFee: number, estimatedDeliveryTime: number, isActive: boolean } };
+export type RestaurantQuery = { restaurant: { id: string, name: string, description: string | null, address: string, city: string, zipCode: string, phone: string, cuisineType: string, imageUrl: string | null, coverImageUrl: string | null, rating: number, deliveryFee: number, estimatedDeliveryTime: number, isActive: boolean, createdAt: string, updatedAt: string } };
 
 export type MenuItemsByRestaurantQueryVariables = Exact<{
   restaurantId: string | number;
@@ -86,7 +86,7 @@ export type MenuItemsByRestaurantQueryVariables = Exact<{
 }>;
 
 
-export type MenuItemsByRestaurantQuery = { menuItemsByRestaurant: { items: Array<{ id: string, name: string, description: string | null, price: number, category: Types.MenuItemCategory, imageUrl: string | null, isAvailable: boolean }>, pageInfo: { totalItems: number, totalPages: number } } };
+export type MenuItemsByRestaurantQuery = { menuItemsByRestaurant: { items: Array<{ id: string, name: string, description: string | null, price: number, category: Types.MenuItemCategory, imageUrl: string | null, isAvailable: boolean, restaurantId: string, createdAt: string, updatedAt: string }>, pageInfo: { totalItems: number, totalPages: number } } };
 
 
 export const LoginDocument = gql`
@@ -101,6 +101,8 @@ export const LoginDocument = gql`
       phone
       role
       avatarUrl
+      createdAt
+      updatedAt
     }
   }
 }
@@ -524,6 +526,8 @@ export const SearchRestaurantsDocument = gql`
       deliveryFee
       estimatedDeliveryTime
       isActive
+      createdAt
+      updatedAt
     }
     pageInfo {
       totalItems
@@ -590,6 +594,8 @@ export const RestaurantDocument = gql`
     deliveryFee
     estimatedDeliveryTime
     isActive
+    createdAt
+    updatedAt
   }
 }
     `;
@@ -640,6 +646,9 @@ export const MenuItemsByRestaurantDocument = gql`
       category
       imageUrl
       isAvailable
+      restaurantId
+      createdAt
+      updatedAt
     }
     pageInfo {
       totalItems

@@ -1,29 +1,26 @@
-import { ApolloClient, createHttpLink, InMemoryCache } from '@apollo/client';
+import { ApolloClient, createHttpLink, InMemoryCache, from } from '@apollo/client';
 import { setContext } from '@apollo/client/link/context';
-
-export const TOKEN_KEY = 'delivery_token';
-export const USER_KEY = 'delivery_user';
+import { API_URL } from './api';
+import { getStoredToken } from './token-storage';
 
 const httpLink = createHttpLink({
-  uri: '/graphql',
+  uri: `${API_URL}/graphql`,
 });
 
-const authLink = setContext((_, { headers }) => {
-  const token = localStorage.getItem(TOKEN_KEY);
+const authLink = setContext(async (_, { headers }) => {
+  const token = await getStoredToken();
   return {
     headers: {
       ...headers,
-      authorization: token ? `Bearer ${token}` : '',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
     },
   };
 });
 
-export const client = new ApolloClient({
-  link: authLink.concat(httpLink),
+export const apolloClient = new ApolloClient({
+  link: from([authLink, httpLink]),
   cache: new InMemoryCache(),
   defaultOptions: {
-    query: {
-      fetchPolicy: 'network-only',
-    },
+    watchQuery: { fetchPolicy: 'cache-and-network' },
   },
 });

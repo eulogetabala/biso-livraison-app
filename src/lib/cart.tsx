@@ -1,105 +1,116 @@
-import { createContext, useCallback, useContext, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import type { MenuItemModel } from '../graphql/types';
 
-export interface CartItem {
-  menuItemId: string;
-  name: string;
-  price: number;
+export type CartLine = {
+  menuItem: MenuItemModel;
   quantity: number;
-  imageUrl?: string | null;
-}
+};
 
-interface CartContextValue {
-  items: CartItem[];
+export type CartInfo = {
   restaurantId: string | null;
   restaurantName: string | null;
   deliveryFee: number;
-  addItem: (
-    item: CartItem,
-    restaurantId: string,
-    restaurantName: string,
-    deliveryFee: number,
-  ) => void;
-  removeItem: (menuItemId: string) => void;
-  updateQuantity: (menuItemId: string, quantity: number) => void;
-  clear: () => void;
-  total: number;
+  lines: CartLine[];
+};
+
+type CartContextValue = {
+  cart: CartInfo;
   count: number;
-}
+  subtotal: number;
+  total: number;
+  addItem: (menuItem: MenuItemModel, restaurantId: string, restaurantName: string, deliveryFee: number) => void;
+  removeItem: (menuItemId: string) => void;
+  setQuantity: (menuItemId: string, quantity: number) => void;
+  clear: () => void;
+};
+
+const emptyCart: CartInfo = {
+  restaurantId: null,
+  restaurantName: null,
+  deliveryFee: 0,
+  lines: [],
+};
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 export function CartProvider({ children }: { children: ReactNode }) {
-  const [restaurantId, setRestaurantId] = useState<string | null>(null);
-  const [restaurantName, setRestaurantName] = useState<string | null>(null);
-  const [deliveryFee, setDeliveryFee] = useState(0);
-  const [items, setItems] = useState<CartItem[]>([]);
+  const [cart, setCart] = useState<CartInfo>(emptyCart);
 
   const addItem = useCallback(
-    (item: CartItem, id: string, name: string, fee: number) => {
-      setRestaurantId(id);
-      setRestaurantName(name);
-      setDeliveryFee(fee);
-      setItems((prev) => {
-        const existing = prev.find((i) => i.menuItemId === item.menuItemId);
-        if (existing) {
-          return prev.map((i) =>
-            i.menuItemId === item.menuItemId
-              ? { ...i, quantity: i.quantity + item.quantity }
-              : i,
-          );
+    (menuItem: MenuItemModel, restaurantId: string, restaurantName: string, deliveryFee: number) => {
+      setCart((prev) => {
+        // On repart sur un nouveau restaurant -> on vide le panier.
+        if (prev.restaurantId && prev.restaurantId !== restaurantId) {
+          return {
+            restaurantId,
+            restaurantName,
+            deliveryFee,
+            lines: [{ menuItem, quantity: 1 }],
+          };
         }
-        return [...prev, item];
+        const existing = prev.lines.find((l) => l.menuItem.id === menuItem.id);
+        const lines = existing
+          ? prev.lines.map((l) => (l.menuItem.id === menuItem.id ? { ...l, quantity: l.quantity + 1 } : l))
+          : [...prev.lines, { menuItem, quantity: 1 }];
+        return {
+          restaurantId,
+          restaurantName,
+          deliveryFee,
+          lines,
+        };
       });
     },
     [],
   );
 
   const removeItem = useCallback((menuItemId: string) => {
-    setItems((prev) => prev.filter((i) => i.menuItemId !== menuItemId));
+    setCart((prev) => ({
+      ...prev,
+      lines: prev.lines.filter((l) => l.menuItem.id !== menuItemId),
+    }));
   }, []);
 
-  const updateQuantity = useCallback((menuItemId: string, quantity: number) => {
-    setItems((prev) =>
-      quantity <= 0
-        ? prev.filter((i) => i.menuItemId !== menuItemId)
-        : prev.map((i) =>
-            i.menuItemId === menuItemId ? { ...i, quantity } : i,
-          ),
-    );
+  const setQuantity = useCallback((menuItemId: string, quantity: number) => {
+    setCart((prev) => ({
+      ...prev,
+      lines:
+        quantity <= 0
+          ? prev.lines.filter((l) => l.menuItem.id !== menuItemId)
+          : prev.lines.map((l) => (l.menuItem.id === menuItemId ? { ...l, quantity } : l)),
+    }));
   }, []);
 
-  const clear = useCallback(() => {
-    setItems([]);
-    setRestaurantId(null);
-    setRestaurantName(null);
-    setDeliveryFee(0);
-  }, []);
+  const clear = useCallback(() => setCart(emptyCart), []);
 
-  const value = useMemo<CartContextValue>(() => {
-    const total = items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const count = items.reduce((sum, i) => sum + i.quantity, 0);
-    return {
-      items,
-      restaurantId,
-      restaurantName,
-      deliveryFee,
-      addItem,
-      removeItem,
-      updateQuantity,
-      clear,
-      total,
-      count,
-    };
-  }, [items, restaurantId, restaurantName, deliveryFee, addItem, removeItem, updateQuantity, clear]);
+  const { count, subtotal } = useMemo(() => {
+    let count = 0;
+    let subtotal = 0;
+    for (const line of cart.lines) {
+      count += line.quantity;
+      subtotal += line.quantity * line.menuItem.price;
+    }
+    return { count, subtotal };
+  }, [cart.lines]);
+
+  const total = subtotal + cart.deliveryFee;
+
+  const value = useMemo(
+    () => ({ cart, count, subtotal, total, addItem, removeItem, setQuantity, clear }),
+    [cart, count, subtotal, total, addItem, removeItem, setQuantity, clear],
+  );
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
 
 export function useCart(): CartContextValue {
   const ctx = useContext(CartContext);
-  if (!ctx) {
-    throw new Error('useCart must be used within CartProvider');
-  }
+  if (!ctx) throw new Error('useCart must be used within CartProvider');
   return ctx;
 }

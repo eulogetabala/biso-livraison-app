@@ -1,50 +1,52 @@
-# Biso Livraison — Frontend
+# Biso Livraison — Application mobile (React Native / Expo)
 
-Application web (client) de Biso Livraison, connectée au backend NestJS + GraphQL.
+Application mobile client pour commander des repas, construite avec **React Native** + **Expo SDK 57** et **Apollo Client** (GraphQL) contre le backend NestJS.
 
-## Stack
+## Prérequis
 
-- Vite + React 19 + TypeScript
-- Apollo Client (GraphQL)
-- Tailwind CSS v4
-- React Router
+- **Node.js** 20+
+- L'application **Expo Go** sur votre téléphone (App Store / Play Store)
+- Le **backend NestJS** démarré (`npm run start:dev` dans `delivery-backend`, port `3001`)
+- Téléphone et ordinateur **sur le même réseau Wi-Fi**
 
-## Démarrage
+## Lancer l'application
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
 
-L'app tourne sur `http://localhost:5173` et proxy vers le backend sur `http://localhost:3001`
-(`/graphql` et `/uploads`). Le backend doit être démarré au préalable.
+Un QR code s'affiche. Scannez-le avec **Expo Go** (Android) ou l'appareil photo (iOS).
 
-## Génération des types GraphQL
+> L'application détecte automatiquement l'IP de votre machine via Expo et se connecte
+> au backend sur `http://<ip-de-votre-machine>:3001`. Si le backend tourne sur une autre
+> machine, modifiez `src/lib/api.ts` (`API_PORT`) ou la logique de résolution.
 
-Les types et hooks sont générés depuis le schéma GraphQL du backend :
+## Autres commandes
 
 ```bash
-npm run codegen          # une fois
-npm run codegen:watch    # en continu pendant le dev
+npm run ios      # Ouvrir dans le simulateur iOS
+npm run android  # Ouvrir dans l'émulateur Android
+npm run typecheck # Vérification TypeScript
+npm run codegen   # Régénérer les types/hooks GraphQL depuis le schéma backend
 ```
 
-- `src/graphql/types.ts` — types du schéma
-- `src/graphql/operations.ts` — hooks typés (`useSearchRestaurantsQuery`, `useCreateOrderMutation`, …)
-- Opérations définies dans `src/graphql/*.graphql`
+## Structure
 
-## Scripts
-
-```bash
-npm run build        # build de production
-npm run preview      # prévisualisation du build
-npm run lint         # oxlint
+```
+src/
+  components/     # Composants UI réutilisables
+  graphql/        # Opérations GraphQL (.graphql) + types générés
+  lib/            # Apollo, auth, panier, utils API
+  navigation/     # Stack + onglets React Navigation
+  screens/        # Écrans de l'application
 ```
 
-## Pages
+## Fonctionnalités
 
-- `/` — restaurants (recherche, filtres, pagination)
-- `/restaurant/:id` — détail restaurant + menu + panier
-- `/checkout` — panier, adresse, paiement à la livraison
-- `/orders` — mes commandes (pagination)
-- `/orders/:id` — détail commande (statut, livreur, annulation)
-- `/login` `/register` — authentification
+- Création de compte / connexion (JWT, persistance locale)
+- Accueil : recherche et filtres par cuisine, restaurants paginés
+- Menu du restaurant : ajout au panier
+- Panier + commande avec paiement à la livraison
+- Suivi de commande (timeline de statut) + annulation
+- Profil utilisateur
