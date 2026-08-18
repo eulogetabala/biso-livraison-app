@@ -40,6 +40,7 @@ export function RestaurantPage() {
       { menuItemId, name, price, quantity: qty, imageUrl },
       restaurant.id,
       restaurant.name,
+      restaurant.deliveryFee,
     );
     setQuantities((prev) => ({ ...prev, [menuItemId]: 1 }));
   };

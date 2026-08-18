@@ -4,11 +4,17 @@ import { useCreateOrderMutation } from '../graphql/operations';
 import { useCart } from '../lib/cart';
 import { EmptyState, formatPrice } from '../components/ui';
 
-const DELIVERY_FEE = 2.5;
-
 export function CheckoutPage() {
-  const { items, restaurantId, restaurantName, total, removeItem, updateQuantity, clear } =
-    useCart();
+  const {
+    items,
+    restaurantId,
+    restaurantName,
+    deliveryFee,
+    total,
+    removeItem,
+    updateQuantity,
+    clear,
+  } = useCart();
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
   const [zipCode, setZipCode] = useState('');
@@ -37,7 +43,7 @@ export function CheckoutPage() {
     );
   }
 
-  const grandTotal = total + DELIVERY_FEE;
+  const grandTotal = total + deliveryFee;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,7 +208,7 @@ export function CheckoutPage() {
             </div>
             <div className="flex justify-between text-slate-600">
               <span>Frais de livraison</span>
-              <span>{formatPrice(DELIVERY_FEE)}</span>
+              <span>{deliveryFee > 0 ? formatPrice(deliveryFee) : 'Offerts'}</span>
             </div>
             <div className="flex justify-between border-t border-slate-200 pt-3 text-base font-semibold text-slate-900">
               <span>Total</span>

@@ -13,7 +13,13 @@ interface CartContextValue {
   items: CartItem[];
   restaurantId: string | null;
   restaurantName: string | null;
-  addItem: (item: CartItem, restaurantId: string, restaurantName: string) => void;
+  deliveryFee: number;
+  addItem: (
+    item: CartItem,
+    restaurantId: string,
+    restaurantName: string,
+    deliveryFee: number,
+  ) => void;
   removeItem: (menuItemId: string) => void;
   updateQuantity: (menuItemId: string, quantity: number) => void;
   clear: () => void;
@@ -26,12 +32,14 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 export function CartProvider({ children }: { children: ReactNode }) {
   const [restaurantId, setRestaurantId] = useState<string | null>(null);
   const [restaurantName, setRestaurantName] = useState<string | null>(null);
+  const [deliveryFee, setDeliveryFee] = useState(0);
   const [items, setItems] = useState<CartItem[]>([]);
 
   const addItem = useCallback(
-    (item: CartItem, id: string, name: string) => {
+    (item: CartItem, id: string, name: string, fee: number) => {
       setRestaurantId(id);
       setRestaurantName(name);
+      setDeliveryFee(fee);
       setItems((prev) => {
         const existing = prev.find((i) => i.menuItemId === item.menuItemId);
         if (existing) {
@@ -65,6 +73,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
     setItems([]);
     setRestaurantId(null);
     setRestaurantName(null);
+    setDeliveryFee(0);
   }, []);
 
   const value = useMemo<CartContextValue>(() => {
@@ -74,6 +83,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       items,
       restaurantId,
       restaurantName,
+      deliveryFee,
       addItem,
       removeItem,
       updateQuantity,
@@ -81,7 +91,7 @@ export function CartProvider({ children }: { children: ReactNode }) {
       total,
       count,
     };
-  }, [items, restaurantId, restaurantName, addItem, removeItem, updateQuantity, clear]);
+  }, [items, restaurantId, restaurantName, deliveryFee, addItem, removeItem, updateQuantity, clear]);
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;
 }
