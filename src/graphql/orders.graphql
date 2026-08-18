@@ -1,0 +1,123 @@
+mutation CreateOrder($input: CreateOrderInput!) {
+  createOrder(input: $input) {
+    id
+    status
+    total
+    deliveryFee
+    grandTotal
+    deliveryAddress
+    deliveryCity
+    deliveryZipCode
+    createdAt
+    payment {
+      method
+      status
+      amount
+    }
+    restaurant {
+      id
+      name
+      imageUrl
+    }
+    items {
+      quantity
+      unitPrice
+      menuItem {
+        id
+        name
+        price
+      }
+    }
+  }
+}
+
+query MyOrders($page: Int = 1, $limit: Int = 10) {
+  myOrders(page: $page, limit: $limit) {
+    items {
+      id
+      status
+      total
+      deliveryFee
+      grandTotal
+      deliveryAddress
+      deliveryCity
+      createdAt
+      restaurant {
+        id
+        name
+        imageUrl
+      }
+      payment {
+        method
+        status
+      }
+      delivery {
+        id
+        status
+        driver {
+          id
+          firstName
+          lastName
+          phone
+        }
+      }
+    }
+    pageInfo {
+      totalItems
+      totalPages
+      currentPage
+      hasNextPage
+    }
+  }
+}
+
+query Order($id: ID!) {
+  order(id: $id) {
+    id
+    status
+    total
+    deliveryFee
+    grandTotal
+    deliveryAddress
+    deliveryCity
+    deliveryZipCode
+    createdAt
+    restaurant {
+      id
+      name
+      imageUrl
+      phone
+    }
+    items {
+      quantity
+      unitPrice
+      menuItem {
+        id
+        name
+        price
+      }
+    }
+    payment {
+      method
+      status
+      amount
+    }
+    delivery {
+      id
+      status
+      driver {
+        id
+        firstName
+        lastName
+        phone
+      }
+    }
+  }
+}
+
+mutation CancelOrder($id: ID!) {
+  cancelOrder(id: $id) {
+    id
+    status
+  }
+}

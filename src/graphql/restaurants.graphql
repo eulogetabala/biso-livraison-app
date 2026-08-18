@@ -1,0 +1,64 @@
+query SearchRestaurants($page: Int = 1, $limit: Int = 12, $input: SearchRestaurantsInput) {
+  searchRestaurants(page: $page, limit: $limit, input: $input) {
+    items {
+      id
+      name
+      description
+      address
+      city
+      zipCode
+      phone
+      cuisineType
+      imageUrl
+      coverImageUrl
+      rating
+      deliveryFee
+      estimatedDeliveryTime
+      isActive
+    }
+    pageInfo {
+      totalItems
+      totalPages
+      currentPage
+      hasNextPage
+      hasPreviousPage
+    }
+  }
+}
+
+query Restaurant($id: ID!) {
+  restaurant(id: $id) {
+    id
+    name
+    description
+    address
+    city
+    zipCode
+    phone
+    cuisineType
+    imageUrl
+    coverImageUrl
+    rating
+    deliveryFee
+    estimatedDeliveryTime
+    isActive
+  }
+}
+
+query MenuItemsByRestaurant($restaurantId: ID!, $page: Int = 1, $limit: Int = 50) {
+  menuItemsByRestaurant(restaurantId: $restaurantId, page: $page, limit: $limit) {
+    items {
+      id
+      name
+      description
+      price
+      category
+      imageUrl
+      isAvailable
+    }
+    pageInfo {
+      totalItems
+      totalPages
+    }
+  }
+}
