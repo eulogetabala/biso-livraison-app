@@ -1,16 +1,22 @@
 export const colors = {
-  primary: '#EA580C',
-  primaryDark: '#C2410C',
-  primaryLight: '#FFF7ED',
-  background: '#F9FAFB',
+  primary: '#FE6400',
+  primaryDark: '#D55400',
+  primaryLight: '#FFF3EC',
+  primaryGlow: 'rgba(254, 100, 0, 0.15)',
+  secondary: '#002774',
+  secondaryDark: '#001C53',
+  secondaryLight: '#E6EAF1',
+  background: '#F4F6FA',
   surface: '#FFFFFF',
-  text: '#111827',
-  textMuted: '#6B7280',
-  border: '#E5E7EB',
-  success: '#16A34A',
-  warning: '#D97706',
-  danger: '#DC2626',
-  info: '#2563EB',
+  text: '#0E1726',
+  textMuted: '#62758F',
+  border: '#E1E6EE',
+  success: '#10B981',
+  warning: '#F59E0B',
+  danger: '#EF4444',
+  info: '#3B82F6',
+  glass: 'rgba(255,255,255,0.85)',
+  glassBorder: 'rgba(255,255,255,0.3)',
 };
 
 export const spacing = {
@@ -19,11 +25,53 @@ export const spacing = {
   md: 16,
   lg: 24,
   xl: 32,
+  xxl: 48,
 };
 
 export const radius = {
-  sm: 8,
-  md: 12,
-  lg: 16,
+  xs: 8,
+  sm: 12,
+  md: 20,
+  lg: 28,
+  xl: 36,
   full: 9999,
+};
+
+export const fonts = {
+  titleBold: 'Montserrat_700Bold',
+  titleSemiBold: 'Montserrat_600SemiBold',
+  bodyRegular: 'PlusJakartaSans_400Regular',
+  bodyMedium: 'PlusJakartaSans_500Medium',
+  bodyBold: 'PlusJakartaSans_700Bold',
+};
+
+export const shadows = {
+  sm: {
+    shadowColor: '#002774',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  md: {
+    shadowColor: '#002774',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.07,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  lg: {
+    shadowColor: '#002774',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.1,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  glow: (color: string) => ({
+    shadowColor: color,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  }),
 };
