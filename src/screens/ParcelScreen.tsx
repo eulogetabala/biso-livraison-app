@@ -1,68 +1,797 @@
-import React, { useRef, useState } from 'react';
-import { Animated, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Animated,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { Button } from '../components/ui';
-import { colors, fonts, radius, shadows, spacing } from '../theme';
+import { colors, radius, spacing, fonts, shadows } from '../theme';
+import FloatingBackButton from '../components/FloatingBackButton';
+import PhoneInput from '../components/PhoneInput';
+import AddressPickerModal from '../components/AddressPickerModal';
+import { TAB_BAR_OFFSET } from '../components/AppTabBar';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Parcel'>;
 
-export default function ParcelScreen({}: Props) {
-  const [from, setFrom] = useState('');
-  const [to, setTo] = useState('');
-  const [description, setDescription] = useState('');
-  const glow = useRef(new Animated.Value(0.7)).current;
+type Destination = 'local' | 'intercity';
 
-  React.useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(glow, { toValue: 1, duration: 1400, useNativeDriver: true }),
-        Animated.timing(glow, { toValue: 0.7, duration: 1400, useNativeDriver: true }),
-      ]),
-    ).start();
-  }, [glow]);
+type Step = 1 | 2 | 3 | 4;
+
+const PARCEL_TYPES = [
+  { label: 'Documents', icon: 'document-text-outline' as const },
+  { label: 'Livres', icon: 'book-outline' as const },
+  { label: 'Téléphone', icon: 'phone-portrait-outline' as const },
+  { label: 'Vêtements', icon: 'shirt-outline' as const },
+  { label: 'Nourriture', icon: 'fast-food-outline' as const },
+  { label: 'Électronique', icon: 'hardware-chip-outline' as const },
+  { label: 'Médicaments', icon: 'medkit-outline' as const },
+  { label: 'Autre', icon: 'ellipsis-horizontal-circle-outline' as const },
+];
+
+const WEIGHTS = [
+  { key: 'petit', label: '< 1 kg', hint: 'Enveloppes, docs', icon: 'cube-outline' as const },
+  { key: 'moyen', label: '1–5 kg', hint: 'Livres, habits', icon: 'cube-outline' as const },
+  { key: 'grand', label: '5–10 kg', hint: 'Cartons, élec.', icon: 'cube-outline' as const },
+];
+
+const STEP_LABELS: Record<Step, string> = {
+  1: 'Destination',
+  2: 'Adresse',
+  3: 'Colis',
+  4: 'Destinataire',
+};
+
+export default function ParcelScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
+  const [step, setStep] = useState<Step>(1);
+  const [destination, setDestination] = useState<Destination | null>(null);
+  const [myPosition, setMyPosition] = useState<string>('Brazzaville');
+  const [locating, setLocating] = useState(false);
+
+  // Étape 2 – adresse
+  const [pickupAddress, setPickupAddress] = useState('');
+  const [dropoffAddress, setDropoffAddress] = useState('');
+  const [pickupManual, setPickupManual] = useState(false);
+  const [dropoffManual, setDropoffManual] = useState(false);
+  const [pickerTarget, setPickerTarget] = useState<'pickup' | 'dropoff' | null>(null);
+
+  // Étape 3 – colis
+  const [parcelType, setParcelType] = useState<string | null>(null);
+  const [customType, setCustomType] = useState('');
+  const [weight, setWeight] = useState<string | null>('petit');
+
+  // Étape 4 – destinataire
+  const [receiverName, setReceiverName] = useState('');
+  const [receiverPhone, setReceiverPhone] = useState('');
+  const [note, setNote] = useState('');
+  const [submitted, setSubmitted] = useState(false);
+
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    transition();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const transition = () => {
+    fadeAnim.setValue(0);
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const goNext = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setStep((s) => (s < 4 ? ((s + 1) as Step) : s));
+    transition();
+  };
+
+  const goBack = () => {
+    Haptics.selectionAsync();
+    setStep((s) => (s > 1 ? ((s - 1) as Step) : s));
+    transition();
+  };
+
+  const locateAddress = async (target: 'pickup' | 'dropoff') => {
+    setLocating(true);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        const fallback = 'Moungali, Brazzaville';
+        setMyPosition(fallback);
+        if (target === 'pickup') setPickupAddress(fallback);
+        else setDropoffAddress(fallback);
+        setLocating(false);
+        return;
+      }
+      const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const places = await Location.reverseGeocodeAsync(position.coords);
+      const place = places[0];
+      const district = place?.district || place?.subregion || place?.city || 'Brazzaville';
+      const city = place?.city && place.city !== district ? `, ${place.city}` : ', Brazzaville';
+      const address = `${district}${city}`;
+      setMyPosition(address);
+      if (target === 'pickup') {
+        setPickupAddress(address);
+        setPickupManual(false);
+      } else {
+        setDropoffAddress(address);
+        setDropoffManual(false);
+      }
+    } catch {
+      setMyPosition('Brazzaville');
+      if (target === 'pickup') setPickupAddress('Brazzaville');
+      else setDropoffAddress('Brazzaville');
+    } finally {
+      setLocating(false);
+    }
+  };
+
+  const price = useMemo(() => {
+    if (!destination || !weight) return 0;
+    const base = destination === 'local' ? 1000 : 2000;
+    const weightExtra = weight === 'moyen' ? 500 : weight === 'grand' ? 1500 : 0;
+    const express = destination === 'intercity' ? 0 : 0;
+    return base + weightExtra + express;
+  }, [destination, weight]);
+
+  const canContinue = (() => {
+    switch (step) {
+      case 1:
+        return destination != null;
+      case 2:
+        return pickupAddress.trim().length > 0 && dropoffAddress.trim().length > 0;
+      case 3:
+        return parcelType != null && (parcelType !== 'Autre' || customType.trim().length > 0);
+      case 4:
+        return receiverName.trim().length > 0 && receiverPhone.trim().length > 0;
+      default:
+        return false;
+    }
+  })();
+
+  const handleConfirm = () => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    setSubmitted(true);
+  };
+
+  const handleBackHome = () => {
+    navigation.navigate('Main', { screen: 'Home' });
+  };
+
+  if (submitted) {
+    return (
+      <SuccessView
+        destination={destination ?? 'local'}
+        pickupAddress={pickupAddress}
+        dropoffAddress={dropoffAddress}
+        parcelType={parcelType === 'Autre' ? customType : parcelType}
+        weight={WEIGHTS.find((w) => w.key === weight)?.label}
+        receiverName={receiverName}
+        price={price}
+        onBackHome={handleBackHome}
+      />
+    );
+  }
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <LinearGradient colors={['#081A4B', colors.secondary, '#18336E']} style={styles.hero}>
-        <Text style={styles.heroTitle}>Expédier un colis</Text>
-        <Text style={styles.heroSubtitle}>Envoie un petit colis dans Brazzaville ou vers Pointe-Noire avec un parcours simple.</Text>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <FloatingBackButton navigation={navigation} />
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={styles.content}
+      >
+        {/* Header */}
+        <LinearGradient colors={['#081A4B', colors.secondary, '#18336E']} style={[styles.hero, { paddingTop: insets.top + 16 }]}>
+          <Text style={styles.heroTitle}>Expédition colis</Text>
+
+          {/* Stepper */}
+          <View style={styles.stepperRow}>
+            {([1, 2, 3, 4] as Step[]).map((s) => {
+              const active = s === step;
+              const done = s < step;
+              return (
+                <React.Fragment key={s}>
+                  {s > 1 && <View style={[styles.stepLine, (done || active) && styles.stepLineActive]} />}
+                  <View style={[styles.stepDot, active && styles.stepDotActive, done && styles.stepDotDone]}>
+                    {done ? (
+                      <Ionicons name="checkmark" size={12} color="#fff" />
+                    ) : (
+                      <Text style={[styles.stepDotText, active && styles.stepDotTextActive]}>{s}</Text>
+                    )}
+                  </View>
+                </React.Fragment>
+              );
+            })}
+          </View>
+          <Text style={styles.stepLabel}>
+            Étape {step} — {STEP_LABELS[step]}
+          </Text>
+        </LinearGradient>
+
+        <Animated.View style={[styles.stepBody, { opacity: fadeAnim }]}>
+          {step === 1 ? (
+            <DestinationStep
+              destination={destination}
+              myPosition={myPosition}
+              locating={locating}
+              onLocate={() => locateAddress('pickup')}
+              onSelect={(d) => {
+                Haptics.selectionAsync();
+                setDestination(d);
+                if (d === 'local') setDropoffAddress('');
+              }}
+            />
+          ) : null}
+
+          {step === 2 ? (
+            <AddressStep
+              pickupAddress={pickupAddress}
+              dropoffAddress={dropoffAddress}
+              pickupManual={pickupManual}
+              dropoffManual={dropoffManual}
+              onPickupManualToggle={() => {
+                Haptics.selectionAsync();
+                setPickupManual((v) => !v);
+              }}
+              onDropoffManualToggle={() => {
+                Haptics.selectionAsync();
+                setDropoffManual((v) => !v);
+              }}
+              onPickupChange={setPickupAddress}
+              onDropoffChange={setDropoffAddress}
+              onLocatePickup={() => setPickerTarget('pickup')}
+              onLocateDropoff={() => setPickerTarget('dropoff')}
+            />
+          ) : null}
+
+          {step === 3 ? (
+            <ParcelStep
+              parcelType={parcelType}
+              customType={customType}
+              weight={weight}
+              onSelectType={(t) => {
+                Haptics.selectionAsync();
+                setParcelType(t);
+              }}
+              onCustomType={setCustomType}
+              onSelectWeight={(w) => {
+                Haptics.selectionAsync();
+                setWeight(w);
+              }}
+            />
+          ) : null}
+
+          {step === 4 ? (
+            <ReceiverStep
+              receiverName={receiverName}
+              receiverPhone={receiverPhone}
+              note={note}
+              onName={setReceiverName}
+              onPhone={setReceiverPhone}
+              onNote={setNote}
+              price={price}
+              destination={destination ?? 'local'}
+            />
+          ) : null}
+        </Animated.View>
+      </ScrollView>
+
+      {/* Bottom bar */}
+      {step < 4 ? (
+        <View style={[styles.bottomBar, styles.bottomBarWithTabs]}>
+          {step > 1 ? (
+            <Pressable style={styles.backBtn} onPress={goBack}>
+              <Ionicons name="arrow-back" size={20} color={colors.secondary} />
+            </Pressable>
+          ) : (
+            <View style={styles.backBtn} />
+          )}
+          <Pressable
+            style={[styles.nextBtnWrap, !canContinue && styles.nextBtnDisabled]}
+            disabled={!canContinue}
+            onPress={goNext}
+          >
+            <LinearGradient
+              colors={[colors.primary, colors.primaryDark]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.nextBtn}
+            >
+              <Text style={styles.nextText}>Continuer</Text>
+              <Ionicons name="arrow-forward" size={18} color="#fff" />
+            </LinearGradient>
+          </Pressable>
+        </View>
+      ) : (
+        <View style={[styles.bottomBar, styles.bottomBarWithTabs]}>
+          <Pressable style={styles.backBtn} onPress={goBack}>
+            <Ionicons name="arrow-back" size={20} color={colors.secondary} />
+          </Pressable>
+          <Pressable
+            style={[styles.nextBtnWrap, !canContinue && styles.nextBtnDisabled]}
+            disabled={!canContinue}
+            onPress={handleConfirm}
+          >
+            <LinearGradient
+              colors={[colors.primary, colors.primaryDark]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.nextBtn}
+            >
+              <Ionicons name="paper-plane-outline" size={17} color="#fff" />
+              <Text style={styles.nextText}>Expédier · {price.toLocaleString('fr-FR')} FCFA</Text>
+            </LinearGradient>
+          </Pressable>
+        </View>
+      )}
+
+      {/* Sélecteur d'adresse sur la carte */}
+      <AddressPickerModal
+        visible={pickerTarget != null}
+        target={pickerTarget ?? 'pickup'}
+        initialAddress={pickerTarget === 'pickup' ? pickupAddress : dropoffAddress}
+        defaultCity={
+          destination === 'intercity' && pickerTarget === 'dropoff'
+            ? 'pointe-noire'
+            : 'brazzaville'
+        }
+        onClose={() => setPickerTarget(null)}
+        onConfirm={(address) => {
+          if (pickerTarget === 'pickup') {
+            setPickupAddress(address);
+            setPickupManual(false);
+          } else {
+            setDropoffAddress(address);
+            setDropoffManual(false);
+          }
+          setPickerTarget(null);
+        }}
+      />
+    </KeyboardAvoidingView>
+  );
+}
+
+/* ─────────────────────────── Steps ─────────────────────────── */
+
+function DestinationStep({
+  destination,
+  myPosition,
+  locating,
+  onLocate,
+  onSelect,
+}: {
+  destination: Destination | null;
+  myPosition: string;
+  locating: boolean;
+  onLocate: () => void;
+  onSelect: (d: Destination) => void;
+}) {
+  return (
+    <View>
+      {/* Position */}
+      <Pressable style={styles.positionCard} onPress={onLocate} disabled={locating}>
+        <View style={styles.positionIcon}>
+          <Ionicons name={locating ? 'sync' : 'locate'} size={18} color={colors.primary} />
+        </View>
+        <View style={styles.positionBody}>
+          <Text style={styles.positionLabel}>{locating ? 'Localisation…' : 'Ma position'}</Text>
+          <Text style={styles.positionValue}>{myPosition}</Text>
+        </View>
+        <Ionicons name="refresh" size={16} color={colors.textMuted} />
+      </Pressable>
+
+      <Text style={styles.sectionTitle}>Où va ton colis ?</Text>
+
+      <Pressable
+        style={[styles.destCard, destination === 'local' && styles.destCardActive]}
+        onPress={() => onSelect('local')}
+      >
+        <View style={[styles.destIcon, { backgroundColor: colors.primaryLight }]}>
+          <Ionicons name="bicycle" size={22} color={colors.primary} />
+        </View>
+        <View style={styles.destBody}>
+          <Text style={styles.destTitle}>Dans Brazzaville</Text>
+          <Text style={styles.destSub}>Livraison express locale, dès 1 000 FCFA</Text>
+        </View>
+        <View style={[styles.radioOuter, destination === 'local' && styles.radioOuterActive]}>
+          {destination === 'local' ? <View style={styles.radioInner} /> : null}
+        </View>
+      </Pressable>
+
+      <Pressable
+        style={[styles.destCard, destination === 'intercity' && styles.destCardActive]}
+        onPress={() => onSelect('intercity')}
+      >
+        <View style={[styles.destIcon, { backgroundColor: '#EEF2FF' }]}>
+          <Ionicons name="swap-horizontal" size={22} color="#4F46E5" />
+        </View>
+        <View style={styles.destBody}>
+          <Text style={styles.destTitle}>Vers Pointe-Noire</Text>
+          <Text style={styles.destSub}>Expédition interville, dès 2 000 FCFA</Text>
+        </View>
+        <View style={[styles.radioOuter, destination === 'intercity' && styles.radioOuterActive]}>
+          {destination === 'intercity' ? <View style={styles.radioInner} /> : null}
+        </View>
+      </Pressable>
+
+      <View style={styles.infoBanner}>
+        <Ionicons name="information-circle" size={16} color={colors.info} />
+        <Text style={styles.infoText}>
+          Un coursier prendra en charge ton colis puis le livrera avec suivi en temps réel.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function AddressStep({
+  pickupAddress,
+  dropoffAddress,
+  pickupManual,
+  dropoffManual,
+  onPickupManualToggle,
+  onDropoffManualToggle,
+  onPickupChange,
+  onDropoffChange,
+  onLocatePickup,
+  onLocateDropoff,
+}: {
+  pickupAddress: string;
+  dropoffAddress: string;
+  pickupManual: boolean;
+  dropoffManual: boolean;
+  onPickupManualToggle: () => void;
+  onDropoffManualToggle: () => void;
+  onPickupChange: (v: string) => void;
+  onDropoffChange: (v: string) => void;
+  onLocatePickup: () => void;
+  onLocateDropoff: () => void;
+}) {
+  return (
+    <View>
+      {/* Adresse de départ */}
+      <View style={styles.addressHeader}>
+        <View style={styles.addressHeaderIcon}>
+          <Ionicons name="storefront-outline" size={16} color={colors.primary} />
+        </View>
+        <Text style={styles.addressTitle}>Adresse de départ</Text>
+      </View>
+
+      {!pickupManual ? (
+        <>
+          <Pressable style={styles.addressRow} onPress={onLocatePickup}>
+            <View style={[styles.addressRowIcon, { backgroundColor: colors.primaryLight }]}>
+              <Ionicons name="navigate" size={18} color={colors.primary} />
+            </View>
+            <View style={styles.addressRowBody}>
+              <Text style={styles.addressRowLabel}>Trouver une adresse sur la carte</Text>
+              <Text style={styles.addressRowValue}>{pickupAddress || 'Brazzaville'}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </Pressable>
+
+          <Pressable style={styles.addressRow} onPress={onPickupManualToggle}>
+            <View style={[styles.addressRowIcon, { backgroundColor: colors.secondaryLight }]}>
+              <Ionicons name="create-outline" size={18} color={colors.secondary} />
+            </View>
+            <View style={styles.addressRowBody}>
+              <Text style={styles.addressRowLabel}>Saisir une adresse</Text>
+              <Text style={styles.addressRowValue}>Taper l'adresse manuellement</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </Pressable>
+        </>
+      ) : (
+        <Field
+          icon="navigate-outline"
+          placeholder="Ex. Rue Mpila, Moungali"
+          value={pickupAddress}
+          onChangeText={onPickupChange}
+        />
+      )}
+
+      {/* Adresse du destinataire */}
+      <View style={[styles.addressHeader, styles.addressHeaderGap]}>
+        <View style={[styles.addressHeaderIcon, { backgroundColor: colors.secondaryLight }]}>
+          <Ionicons name="flag-outline" size={16} color={colors.secondary} />
+        </View>
+        <Text style={styles.addressTitle}>Adresse du destinataire</Text>
+      </View>
+
+      {!dropoffManual ? (
+        <>
+          <Pressable style={styles.addressRow} onPress={onLocateDropoff}>
+            <View style={[styles.addressRowIcon, { backgroundColor: colors.secondaryLight }]}>
+              <Ionicons name="navigate" size={18} color={colors.secondary} />
+            </View>
+            <View style={styles.addressRowBody}>
+              <Text style={styles.addressRowLabel}>Trouver une adresse sur la carte</Text>
+              <Text style={styles.addressRowValue}>{dropoffAddress || 'Brazzaville'}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </Pressable>
+
+          <Pressable style={styles.addressRow} onPress={onDropoffManualToggle}>
+            <View style={[styles.addressRowIcon, { backgroundColor: '#EEF2FF' }]}>
+              <Ionicons name="create-outline" size={18} color="#4F46E5" />
+            </View>
+            <View style={styles.addressRowBody}>
+              <Text style={styles.addressRowLabel}>Saisir une adresse</Text>
+              <Text style={styles.addressRowValue}>Taper l'adresse manuellement</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+          </Pressable>
+        </>
+      ) : (
+        <Field
+          icon="location-outline"
+          placeholder="Ex. Avenue Matsoua, Bacongo"
+          value={dropoffAddress}
+          onChangeText={onDropoffChange}
+        />
+      )}
+    </View>
+  );
+}
+
+function ParcelStep({
+  parcelType,
+  customType,
+  weight,
+  onSelectType,
+  onCustomType,
+  onSelectWeight,
+}: {
+  parcelType: string | null;
+  customType: string;
+  weight: string | null;
+  onSelectType: (t: string) => void;
+  onCustomType: (v: string) => void;
+  onSelectWeight: (w: string) => void;
+}) {
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Que contient le colis ?</Text>
+
+      <View style={styles.typeGrid}>
+        {PARCEL_TYPES.map((t) => {
+          const active = parcelType === t.label;
+          return (
+            <Pressable
+              key={t.label}
+              style={[styles.typeCard, active && styles.typeCardActive]}
+              onPress={() => onSelectType(t.label)}
+            >
+              <View style={[styles.typeIcon, active && styles.typeIconActive]}>
+                <Ionicons name={t.icon} size={20} color={active ? '#fff' : colors.secondary} />
+              </View>
+              <Text style={[styles.typeLabel, active && styles.typeLabelActive]} numberOfLines={1}>
+                {t.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+
+      {parcelType === 'Autre' ? (
+        <View style={styles.customWrap}>
+          <Field
+            icon="create-outline"
+            placeholder="Décris ton colis"
+            value={customType}
+            onChangeText={onCustomType}
+          />
+        </View>
+      ) : null}
+
+      <Text style={[styles.sectionTitle, styles.weightTitle]}>Poids estimé</Text>
+      <View style={styles.weightRow}>
+        {WEIGHTS.map((w) => {
+          const active = weight === w.key;
+          return (
+            <Pressable
+              key={w.key}
+              style={[styles.weightCard, active && styles.weightCardActive]}
+              onPress={() => onSelectWeight(w.key)}
+            >
+              <Ionicons
+                name={w.icon}
+                size={18}
+                color={active ? colors.primary : colors.textMuted}
+              />
+              <Text style={[styles.weightLabel, active && styles.weightLabelActive]}>{w.label}</Text>
+              <Text style={styles.weightHint}>{w.hint}</Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function ReceiverStep({
+  receiverName,
+  receiverPhone,
+  note,
+  onName,
+  onPhone,
+  onNote,
+  price,
+  destination,
+}: {
+  receiverName: string;
+  receiverPhone: string;
+  note: string;
+  onName: (v: string) => void;
+  onPhone: (v: string) => void;
+  onNote: (v: string) => void;
+  price: number;
+  destination: Destination;
+}) {
+  return (
+    <View>
+      <Text style={styles.sectionTitle}>Qui reçoit le colis ?</Text>
+
+      <Field
+        icon="person-outline"
+        label="Nom du destinataire"
+        placeholder="Ex. Grâce Mavoungou"
+        value={receiverName}
+        onChangeText={onName}
+      />
+      <View style={styles.field}>
+        <Text style={styles.fieldLabel}>Téléphone du destinataire</Text>
+        <View style={styles.fieldWrap}>
+          <PhoneInput
+            value={receiverPhone}
+            onChange={onPhone}
+            placeholder="06 000 00 00"
+          />
+        </View>
+      </View>
+      <Field
+        icon="chatbubble-outline"
+        label="Note pour le coursier (optionnel)"
+        placeholder="Code d'accès, instructions…"
+        value={note}
+        onChangeText={onNote}
+        multiline
+      />
+
+      {/* Résumé */}
+      <View style={styles.summaryCard}>
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Type de livraison</Text>
+          <Text style={styles.summaryValue}>{destination === 'local' ? 'Express local' : 'Interville'}</Text>
+        </View>
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryLabel}>Frais d'expédition</Text>
+          <Text style={styles.summaryValue}>{price.toLocaleString('fr-FR')} FCFA</Text>
+        </View>
+        <View style={styles.summaryDivider} />
+        <View style={styles.summaryRow}>
+          <Text style={styles.summaryTotal}>Total estimé</Text>
+          <Text style={styles.summaryTotalPrice}>{price.toLocaleString('fr-FR')} FCFA</Text>
+        </View>
+        <Text style={styles.summaryHint}>Paiement en espèces à la remise ou à la livraison.</Text>
+      </View>
+    </View>
+  );
+}
+
+function SuccessView({
+  destination,
+  pickupAddress,
+  dropoffAddress,
+  parcelType,
+  weight,
+  receiverName,
+  price,
+  onBackHome,
+}: {
+  destination: Destination;
+  pickupAddress: string;
+  dropoffAddress: string;
+  parcelType: string | null;
+  weight?: string;
+  receiverName: string;
+  price: number;
+  onBackHome: () => void;
+}) {
+  return (
+    <ScrollView style={styles.successContainer} contentContainerStyle={styles.successContent} showsVerticalScrollIndicator={false}>
+      <LinearGradient colors={['#081A4B', colors.secondary, '#18336E']} style={styles.successHero}>
+        <View style={styles.successIcon}>
+          <Ionicons name="checkmark" size={40} color="#fff" />
+        </View>
+        <Text style={styles.successTitle}>Commande reçue</Text>
+        <Text style={styles.successSubtitle}>Vous serez contacté par nos équipes d'ici peu.</Text>
       </LinearGradient>
 
-      <Animated.View style={[styles.ctaCard, { opacity: glow }]}>
-        <LinearGradient colors={['#ffffff', '#F8FAFF']} style={styles.ctaGradient}>
-          <View style={styles.ctaRow}>
-            <View style={styles.ctaIcon}>
-              <Ionicons name="cube-outline" size={22} color={colors.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.ctaTitle}>Livraison locale</Text>
-              <Text style={styles.ctaText}>Brazzaville en express, avec suivi et coursier disponible.</Text>
-            </View>
+      {/* Expéditeur */}
+      <View style={styles.successBlock}>
+        <View style={styles.successBlockHeader}>
+          <View style={[styles.successBlockIcon, { backgroundColor: colors.primaryLight }]}>
+            <Ionicons name="storefront-outline" size={16} color={colors.primary} />
           </View>
-          <View style={styles.ctaRow}>
-            <View style={[styles.ctaIcon, { backgroundColor: '#EEF2FF' }]}>
-              <Ionicons name="swap-horizontal-outline" size={22} color="#4F46E5" />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.ctaTitle}>Interville</Text>
-              <Text style={styles.ctaText}>Brazzaville → Pointe-Noire pour les petits colis prioritaires.</Text>
-            </View>
-          </View>
-        </LinearGradient>
-      </Animated.View>
-
-      <View style={styles.formCard}>
-        <Field icon="navigate-outline" label="Adresse de départ" value={from} onChangeText={setFrom} placeholder="Ex. Moungali, Brazzaville" />
-        <Field icon="location-outline" label="Adresse d’arrivée" value={to} onChangeText={setTo} placeholder="Ex. Centre-ville, Pointe-Noire" />
-        <Field icon="document-text-outline" label="Description du colis" value={description} onChangeText={setDescription} placeholder="Documents, colis léger, gâteau..." multiline />
-        <Button title="Demander une expédition" style={{ marginTop: spacing.md }} />
+          <Text style={styles.successBlockTitle}>Adresse de l'expéditeur</Text>
+        </View>
+        <Text style={styles.successBlockValue}>{pickupAddress}</Text>
       </View>
+
+      {/* Destinataire */}
+      <View style={styles.successBlock}>
+        <View style={styles.successBlockHeader}>
+          <View style={[styles.successBlockIcon, { backgroundColor: colors.secondaryLight }]}>
+            <Ionicons name="person-outline" size={16} color={colors.secondary} />
+          </View>
+          <Text style={styles.successBlockTitle}>Destinataire</Text>
+        </View>
+        <Text style={styles.successBlockValue}>{receiverName}</Text>
+        <Text style={styles.successBlockSub}>{dropoffAddress}</Text>
+      </View>
+
+      {/* Récapitulatif */}
+      <View style={styles.successCard}>
+        <View style={styles.successRow}>
+          <Text style={styles.successLabel}>Colis</Text>
+          <Text style={styles.successValue}>
+            {parcelType ?? '—'} {weight ? `· ${weight}` : ''}
+          </Text>
+        </View>
+        <View style={styles.successDivider} />
+        <View style={styles.successRow}>
+          <Text style={styles.successLabel}>Type de livraison</Text>
+          <Text style={styles.successValue}>
+            {destination === 'local' ? 'Express local' : 'Interville'}
+          </Text>
+        </View>
+        <View style={styles.successDivider} />
+        <View style={styles.successRow}>
+          <Text style={styles.successLabel}>Montant</Text>
+          <Text style={styles.successPrice}>{price.toLocaleString('fr-FR')} FCFA</Text>
+        </View>
+      </View>
+
+      <View style={styles.successInfo}>
+        <Ionicons name="call-outline" size={18} color={colors.primary} />
+        <Text style={styles.successInfoText}>
+          Nos équipes vous contacteront rapidement pour organiser la prise en charge du colis.
+        </Text>
+      </View>
+
+      <Pressable style={styles.successHomeWrap} onPress={onBackHome}>
+        <LinearGradient
+          colors={[colors.primary, colors.primaryDark]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.successHomeBtn}
+        >
+          <Ionicons name="home-outline" size={18} color="#fff" />
+          <Text style={styles.successHomeText}>Retour à l'accueil</Text>
+        </LinearGradient>
+      </Pressable>
     </ScrollView>
   );
 }
+
+/* ─────────────────────────── Shared ─────────────────────────── */
 
 function Field({
   icon,
@@ -71,17 +800,19 @@ function Field({
   onChangeText,
   placeholder,
   multiline,
+  keyboardType,
 }: {
   icon: any;
-  label: string;
+  label?: string;
   value: string;
-  onChangeText: (value: string) => void;
+  onChangeText: (v: string) => void;
   placeholder: string;
   multiline?: boolean;
+  keyboardType?: 'default' | 'phone-pad';
 }) {
   return (
     <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
       <View style={[styles.fieldWrap, multiline && styles.fieldWrapMultiline]}>
         <Ionicons name={icon} size={18} color={colors.textMuted} />
         <TextInput
@@ -91,6 +822,7 @@ function Field({
           placeholder={placeholder}
           placeholderTextColor={colors.textMuted}
           multiline={multiline}
+          keyboardType={keyboardType}
         />
       </View>
     </View>
@@ -99,49 +831,232 @@ function Field({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { paddingBottom: spacing.xxl },
+  content: { paddingBottom: TAB_BAR_OFFSET + 32 },
+
+  // Hero
   hero: {
-    paddingTop: 24,
+    alignItems: 'center',
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.lg,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 26 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.72)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6, lineHeight: 18 },
-  ctaCard: {
-    marginHorizontal: spacing.lg,
-    marginTop: -spacing.lg,
-    borderRadius: radius.xl,
-    overflow: 'hidden',
-    ...shadows.lg,
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 19, textAlign: 'center' },
+
+  // Stepper
+  stepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing.lg,
   },
-  ctaGradient: { padding: spacing.lg, gap: spacing.md },
-  ctaRow: { flexDirection: 'row', gap: spacing.md },
-  ctaIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
+  stepLine: {
+    flex: 1,
+    height: 2,
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    marginHorizontal: 6,
+  },
+  stepLineActive: { backgroundColor: colors.primary },
+  stepDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepDotActive: { backgroundColor: colors.primary },
+  stepDotDone: { backgroundColor: colors.success },
+  stepDotText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+  },
+  stepDotTextActive: { color: '#fff' },
+  stepLabel: {
+    color: 'rgba(255,255,255,0.7)',
+    fontFamily: fonts.bodyMedium,
+    fontSize: 12,
+    marginTop: spacing.sm,
+  },
+
+  stepBody: { padding: spacing.lg },
+
+  // Position
+  positionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    ...shadows.md,
+  },
+  positionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  ctaTitle: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 16 },
-  ctaText: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 4, lineHeight: 18 },
-  formCard: {
-    margin: spacing.lg,
-    backgroundColor: colors.surface,
-    borderRadius: radius.lg,
-    padding: spacing.lg,
-    ...shadows.md,
+  positionBody: { flex: 1 },
+  positionLabel: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
   },
+  positionValue: {
+    fontSize: 15,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+    marginTop: 2,
+  },
+
+  // Section titles
+  sectionTitle: {
+    fontSize: 16,
+    fontFamily: fonts.titleBold,
+    color: colors.secondary,
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  weightTitle: { marginTop: spacing.xl },
+
+  // Destination cards
+  destCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    ...shadows.sm,
+  },
+  destCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: '#FFFDFB',
+    ...shadows.glow(colors.primaryGlow),
+  },
+  destIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destBody: { flex: 1 },
+  destTitle: {
+    fontSize: 15,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+  },
+  destSub: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: 3,
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterActive: { borderColor: colors.primary },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: colors.primary,
+  },
+
+  infoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: '#EFF6FF',
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.md,
+  },
+  infoText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: '#1D4ED8',
+    lineHeight: 17,
+  },
+
+  // Address
+  addressHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: spacing.sm,
+  },
+  addressHeaderGap: { marginTop: spacing.xl },
+  addressHeaderIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressTitle: {
+    fontSize: 15,
+    fontFamily: fonts.titleBold,
+    color: colors.secondary,
+  },
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.sm,
+    ...shadows.sm,
+  },
+  addressRowIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressRowBody: { flex: 1 },
+  addressRowLabel: {
+    fontSize: 14,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+  },
+  addressRowValue: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+
+  // Fields
   field: { marginBottom: spacing.md },
-  fieldLabel: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 13, marginBottom: 6 },
+  fieldLabel: {
+    fontSize: 12,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+    marginBottom: 6,
+  },
   fieldWrap: {
     borderWidth: 1.5,
     borderColor: colors.border,
     borderRadius: radius.md,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -149,6 +1064,283 @@ const styles = StyleSheet.create({
     minHeight: 54,
   },
   fieldWrapMultiline: { alignItems: 'flex-start', paddingTop: spacing.md },
-  fieldInput: { flex: 1, color: colors.text, fontFamily: fonts.bodyMedium, fontSize: 15 },
-  fieldInputMultiline: { minHeight: 90, textAlignVertical: 'top' },
+  fieldInput: { flex: 1, color: colors.text, fontFamily: fonts.bodyMedium, fontSize: 15, paddingVertical: 12 },
+  fieldInputMultiline: { minHeight: 80, textAlignVertical: 'top' },
+
+  // Parcel type
+  typeGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  typeCard: {
+    width: '31%',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    gap: 6,
+    ...shadows.sm,
+  },
+  typeCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: '#FFFDFB',
+  },
+  typeIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.secondaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  typeIconActive: { backgroundColor: colors.primary },
+  typeLabel: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.secondary,
+  },
+  typeLabelActive: { color: colors.primary, fontFamily: fonts.bodyBold },
+  customWrap: { marginTop: spacing.md },
+
+  // Weight
+  weightRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  weightCard: {
+    flex: 1,
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingVertical: spacing.md,
+    gap: 4,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    ...shadows.sm,
+  },
+  weightCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  weightLabel: {
+    fontSize: 13,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+  },
+  weightLabelActive: { color: colors.primary },
+  weightHint: {
+    fontSize: 10,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+  },
+
+  // Summary
+  summaryCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginTop: spacing.sm,
+    ...shadows.md,
+  },
+  summaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 6,
+  },
+  summaryLabel: { fontSize: 13, fontFamily: fonts.bodyMedium, color: colors.textMuted },
+  summaryValue: { fontSize: 13, fontFamily: fonts.bodyBold, color: colors.secondary },
+  summaryDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginVertical: spacing.sm,
+  },
+  summaryTotal: { fontSize: 15, fontFamily: fonts.titleBold, color: colors.secondary },
+  summaryTotalPrice: { fontSize: 18, fontFamily: fonts.titleBold, color: colors.primary },
+  summaryHint: {
+    fontSize: 11,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+  },
+
+  // Bottom bar
+  bottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.lg,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  bottomBarWithTabs: { marginBottom: TAB_BAR_OFFSET },
+  backBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nextBtnWrap: {
+    flex: 1,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
+  nextBtnDisabled: { opacity: 0.45 },
+  nextBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 15,
+    borderRadius: radius.md,
+  },
+  nextText: {
+    color: '#fff',
+    fontSize: 15,
+    fontFamily: fonts.titleBold,
+  },
+
+  // Success
+  successContainer: { flex: 1, backgroundColor: colors.background },
+  successContent: { paddingBottom: TAB_BAR_OFFSET + 32 },
+  successHero: {
+    alignItems: 'center',
+    paddingTop: 48,
+    paddingBottom: spacing.xl,
+    borderBottomLeftRadius: radius.xl,
+    borderBottomRightRadius: radius.xl,
+  },
+  successIcon: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: colors.success,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.glow('#10B981'),
+  },
+  successTitle: {
+    color: '#fff',
+    fontFamily: fonts.titleBold,
+    fontSize: 20,
+    marginTop: spacing.md,
+  },
+  successSubtitle: {
+    color: 'rgba(255,255,255,0.72)',
+    fontFamily: fonts.bodyMedium,
+    fontSize: 13,
+    marginTop: 4,
+  },
+  successCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    margin: spacing.lg,
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    ...shadows.md,
+  },
+  successBlock: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    padding: spacing.md,
+    ...shadows.md,
+  },
+  successBlockHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginBottom: 6,
+  },
+  successBlockIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  successBlockTitle: {
+    fontSize: 13,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+  },
+  successBlockValue: {
+    fontSize: 14,
+    fontFamily: fonts.titleBold,
+    color: colors.text,
+    marginTop: 2,
+    lineHeight: 20,
+  },
+  successBlockSub: {
+    fontSize: 13,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: 2,
+    lineHeight: 19,
+  },
+  successRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  successLabel: { fontSize: 12, fontFamily: fonts.bodyMedium, color: colors.textMuted },
+  successValue: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+    textAlign: 'right',
+  },
+  successPrice: { fontSize: 16, fontFamily: fonts.titleBold, color: colors.primary },
+  successDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  successInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginHorizontal: spacing.lg,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.md,
+    padding: spacing.md,
+  },
+  successInfoText: {
+    flex: 1,
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.primary,
+    lineHeight: 17,
+  },
+  successHomeWrap: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.md,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
+  successHomeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 15,
+    borderRadius: radius.md,
+  },
+  successHomeText: {
+    color: '#fff',
+    fontSize: 15,
+    fontFamily: fonts.titleBold,
+  },
 });

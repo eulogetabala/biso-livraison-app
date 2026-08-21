@@ -2,18 +2,27 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { MockProduct } from '../mocks/data';
 import { getMockProducts } from '../mocks/service';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
 import { formatPrice } from '../components/ui';
+import ProductDetailModal from '../components/ProductDetailModal';
+import { MARKET_RESTAURANT_ID, MARKET_RESTAURANT_NAME, menuItemFromProduct } from '../lib/cart-helpers';
+import { useCart } from '../lib/cart';
+import FloatingBackButton from '../components/FloatingBackButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Products'>;
 
 export default function ProductsScreen({ route, navigation }: Props) {
   const [products, setProducts] = useState<MockProduct[]>([]);
+  const [selectedProduct, setSelectedProduct] = useState<MockProduct | null>(null);
   const selectedCategory = route.params?.category;
+  const { addItem } = useCart();
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     getMockProducts().then(setProducts);
@@ -24,14 +33,27 @@ export default function ProductsScreen({ route, navigation }: Props) {
     return products.filter((product) => product.category.toLowerCase() === selectedCategory.toLowerCase());
   }, [products, selectedCategory]);
 
+  const handleModalAdd = (quantity: number) => {
+    if (!selectedProduct) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    addItem(
+      menuItemFromProduct(selectedProduct),
+      MARKET_RESTAURANT_ID,
+      MARKET_RESTAURANT_NAME,
+      0,
+      undefined,
+      quantity,
+    );
+    setSelectedProduct(null);
+  };
+
   return (
     <View style={styles.container}>
-      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={styles.hero}>
+      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={[styles.hero, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.heroTitle}>{selectedCategory ? selectedCategory : 'Tous les produits'}</Text>
-        <Text style={styles.heroSubtitle}>
-          {selectedCategory ? `Une sélection dédiée à la catégorie ${selectedCategory.toLowerCase()}.` : 'Boissons, volailles, fruits, légumes, épicerie et achats de proximité.'}
-        </Text>
       </LinearGradient>
+
+      <FloatingBackButton navigation={navigation} />
 
       {selectedCategory ? (
         <Pressable style={styles.backChip} onPress={() => navigation.navigate('Categories')}>
@@ -47,7 +69,7 @@ export default function ProductsScreen({ route, navigation }: Props) {
         columnWrapperStyle={styles.row}
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <View style={styles.card}>
+          <Pressable style={styles.card} onPress={() => setSelectedProduct(item)}>
             <Image source={{ uri: item.imageUrl }} style={styles.image} />
             {item.badge ? (
               <View style={styles.badge}>
@@ -65,8 +87,22 @@ export default function ProductsScreen({ route, navigation }: Props) {
                 </View>
               </View>
             </View>
-          </View>
+          </Pressable>
         )}
+      />
+
+      {/* Fiche produit */}
+      <ProductDetailModal
+        visible={selectedProduct != null}
+        onClose={() => setSelectedProduct(null)}
+        id={selectedProduct?.id ?? ''}
+        imageUrl={selectedProduct?.imageUrl}
+        name={selectedProduct?.name ?? ''}
+        price={selectedProduct?.price ?? 0}
+        badge={selectedProduct?.badge}
+        categoryLabel={selectedProduct?.category}
+        seller={selectedProduct?.seller}
+        onAddToCart={handleModalAdd}
       />
     </View>
   );
@@ -75,14 +111,14 @@ export default function ProductsScreen({ route, navigation }: Props) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   hero: {
-    paddingTop: 24,
-    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
     paddingBottom: spacing.xl,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 26 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.72)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6 },
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 20, textAlign: 'center' },
   backChip: {
     marginTop: spacing.md,
     marginHorizontal: spacing.lg,
@@ -96,7 +132,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   backChipText: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 12 },
-  list: { padding: spacing.lg, gap: spacing.md },
+  list: { padding: spacing.lg, gap: spacing.md, paddingBottom: 120 },
   row: { gap: spacing.md },
   card: {
     flex: 1,

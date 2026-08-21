@@ -1,19 +1,22 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { getMockRestaurantCoordinates } from '../mocks/service';
 import { mockRestaurants } from '../mocks/data';
 import { assetUrl } from '../lib/api';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
+import FloatingBackButton from '../components/FloatingBackButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NearbyMap'>;
 
-export default function NearbyMapScreen({}: Props) {
+export default function NearbyMapScreen({ navigation }: Props) {
   const restaurants = useMemo(() => mockRestaurants.slice(0, 3), []);
   const mapRef = useRef<MapView>(null);
   const [selectedId, setSelectedId] = useState(restaurants[0]?.id);
+  const insets = useSafeAreaInsets();
 
   const focusRestaurant = (id: string) => {
     setSelectedId(id);
@@ -63,10 +66,15 @@ export default function NearbyMapScreen({}: Props) {
         })}
       </MapView>
 
-      <View style={styles.overlay}>
+      <View style={[styles.overlay, { top: insets.top + 16, left: 64 }]}>
         <Text style={styles.title}>Restaurants proches</Text>
-        <Text style={styles.subtitle}>Carte marquée avec les restos autour de toi</Text>
       </View>
+
+      <FloatingBackButton
+        navigation={navigation}
+        background="rgba(255,255,255,0.94)"
+        topOffset={16}
+      />
 
       <View style={styles.bottomSheet}>
         {restaurants.map((restaurant) => (
@@ -103,8 +111,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     ...shadows.md,
   },
-  title: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 20 },
-  subtitle: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 4 },
+  title: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 18, textAlign: 'center' },
   bottomSheet: {
     position: 'absolute',
     left: 16,

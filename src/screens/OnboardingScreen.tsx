@@ -345,7 +345,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xl,
   },
   slideTitle: {
-    fontSize: 26,
+    fontSize: 22,
     color: colors.secondary,
     textAlign: 'center',
     marginBottom: spacing.md,

@@ -21,7 +21,7 @@ import { Button } from '../components/ui';
 import { Ionicons } from '@expo/vector-icons';
 import PhoneInput from '../components/PhoneInput';
 import { MOCK_MODE } from '../config/mock';
-import { mockRegister } from '../mocks/service';
+import { mockRequestOtp } from '../mocks/service';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -86,15 +86,13 @@ export default function RegisterScreen({ navigation }: Props) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
       if (MOCK_MODE) {
-        const result = await mockRegister({
+        await mockRequestOtp(`${countryCode}${phone}`.replace(/\s+/g, ''));
+        navigation.navigate('Otp', {
+          phone: `${countryCode}${phone}`.replace(/\s+/g, ''),
           firstName: firstName.trim(),
           lastName: lastName.trim(),
-          phone: `${countryCode}${phone}`.replace(/\s+/g, ''),
           password,
         });
-        await setTokenAndUser(result.accessToken, result.user);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        navigation.replace('Main');
         return;
       }
       await register({
@@ -367,7 +365,7 @@ const styles = StyleSheet.create({
     height: 52,
   },
   appName: {
-    fontSize: 24,
+    fontSize: 20,
     color: '#fff',
     fontFamily: fonts.titleBold,
     letterSpacing: 0.5,

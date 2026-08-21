@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   FlatList,
   Image,
   Pressable,
@@ -20,11 +21,14 @@ import type { RestaurantModel } from '../graphql/types';
 import { assetUrl } from '../lib/api';
 import { useCart } from '../lib/cart';
 import { useAuth } from '../lib/auth';
+import { computeDeliveryFee } from '../lib/pricing';
 import { MOCK_MODE } from '../config/mock';
 import type { MockDriver, MockProduct } from '../mocks/data';
 import { getMockDrivers, getMockProducts, getMockRestaurants } from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { EmptyState, formatPrice, SkeletonBlock } from '../components/ui';
+import ProductDetailModal from '../components/ProductDetailModal';
+import { MARKET_RESTAURANT_ID, MARKET_RESTAURANT_NAME, menuItemFromProduct } from '../lib/cart-helpers';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -34,6 +38,10 @@ type Props = CompositeScreenProps<
   BottomTabScreenProps<MainTabParamList, 'Home'>,
   NativeStackScreenProps<RootStackParamList>
 >;
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const HERO_CARD_WIDTH = SCREEN_WIDTH - spacing.lg * 2;
+const HERO_SNAP = HERO_CARD_WIDTH + spacing.md;
 
 const CUISINES: { label: string; value?: string | 'ALL'; emoji: string }[] = [
   { label: 'Tous', value: 'ALL', emoji: '🍽️' },
@@ -107,7 +115,8 @@ export default function HomeScreen({ navigation }: Props) {
   const [locationLabel, setLocationLabel] = useState('Localisation en cours...');
   const [refreshing, setRefreshing] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('boissons');
-  const { count, total } = useCart();
+  const [selectedProduct, setSelectedProduct] = useState<MockProduct | null>(null);
+  const { count, total, addItem } = useCart();
   const heroScrollX = useRef(new Animated.Value(0)).current;
   const heroListRef = useRef<FlatList<(typeof HERO_SLIDES)[number]> | null>(null);
   const heroIndexRef = useRef(0);
@@ -294,7 +303,7 @@ export default function HomeScreen({ navigation }: Props) {
     const interval = setInterval(() => {
       heroIndexRef.current = (heroIndexRef.current + 1) % HERO_SLIDES.length;
       heroListRef.current?.scrollToOffset({
-        offset: heroIndexRef.current * 310,
+        offset: heroIndexRef.current * HERO_SNAP,
         animated: true,
       });
     }, 4200);
@@ -323,6 +332,23 @@ export default function HomeScreen({ navigation }: Props) {
     const selected = HOME_CATEGORIES.find((category) => category.key === key);
     navigation.navigate('Products', selected ? { category: selected.label } : undefined);
   }, [navigation]);
+
+  const handleProductModalAdd = useCallback(
+    (quantity: number) => {
+      if (!selectedProduct) return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      addItem(
+        menuItemFromProduct(selectedProduct),
+        MARKET_RESTAURANT_ID,
+        MARKET_RESTAURANT_NAME,
+        0,
+        undefined,
+        quantity,
+      );
+      setSelectedProduct(null);
+    },
+    [selectedProduct, addItem],
+  );
 
   const greetingName = user?.firstName || 'Client';
 
@@ -396,7 +422,7 @@ export default function HomeScreen({ navigation }: Props) {
             keyExtractor={(item) => item.id}
             horizontal
             pagingEnabled
-            snapToInterval={310}
+            snapToInterval={HERO_SNAP}
             decelerationRate="fast"
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.heroList}
@@ -404,21 +430,29 @@ export default function HomeScreen({ navigation }: Props) {
               useNativeDriver: false,
             })}
             onMomentumScrollEnd={(event) => {
-              heroIndexRef.current = Math.round(event.nativeEvent.contentOffset.x / 310);
+              heroIndexRef.current = Math.round(event.nativeEvent.contentOffset.x / HERO_SNAP);
             }}
             renderItem={({ item }) => (
               <View style={styles.heroCard}>
                 <Image source={{ uri: item.image }} style={styles.heroImage} />
-                <LinearGradient colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.86)']} style={styles.heroOverlay} />
+                <LinearGradient
+                  colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.45)', 'rgba(0,0,0,0.92)']}
+                  locations={[0, 0.45, 1]}
+                  style={styles.heroOverlay}
+                />
                 <View style={styles.heroBadge}>
                   <Text style={styles.heroBadgeText}>{item.badge}</Text>
                 </View>
                 <View style={styles.heroContent}>
                   <Text style={styles.heroTitle}>{item.title}</Text>
-                  <Text style={styles.heroSubtitle}>{item.subtitle}</Text>
+                  <Text style={styles.heroSubtitle} numberOfLines={2}>
+                    {item.subtitle}
+                  </Text>
                   <Pressable style={styles.heroCta} onPress={() => handleHeroCta(item.id)}>
                     <Text style={styles.heroCtaText}>{item.cta}</Text>
-                    <Ionicons name="arrow-forward" size={16} color="#fff" />
+                    <View style={styles.heroCtaIcon}>
+                      <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+                    </View>
                   </Pressable>
                 </View>
               </View>
@@ -428,13 +462,13 @@ export default function HomeScreen({ navigation }: Props) {
           <View style={styles.heroDots}>
             {HERO_SLIDES.map((_, index) => {
               const width = heroScrollX.interpolate({
-                inputRange: [(index - 1) * 310, index * 310, (index + 1) * 310],
-                outputRange: [8, 24, 8],
+                inputRange: [(index - 1) * HERO_SNAP, index * HERO_SNAP, (index + 1) * HERO_SNAP],
+                outputRange: [8, 26, 8],
                 extrapolate: 'clamp',
               });
               const opacity = heroScrollX.interpolate({
-                inputRange: [(index - 1) * 310, index * 310, (index + 1) * 310],
-                outputRange: [0.3, 1, 0.3],
+                inputRange: [(index - 1) * HERO_SNAP, index * HERO_SNAP, (index + 1) * HERO_SNAP],
+                outputRange: [0.35, 1, 0.35],
                 extrapolate: 'clamp',
               });
               return <Animated.View key={index} style={[styles.heroDot, { width, opacity }]} />;
@@ -504,7 +538,7 @@ export default function HomeScreen({ navigation }: Props) {
                       <MetricPill icon="time-outline" value={`${restaurant.estimatedDeliveryTime} min`} />
                     </View>
                     <View style={styles.metricsRow}>
-                      <MetricPill icon="pricetag-outline" value={`Dès ${formatPrice(restaurant.deliveryFee + 2500)}`} />
+                      <MetricPill icon="pricetag-outline" value={`Dès ${formatPrice(computeDeliveryFee(restaurant.distanceKm))}`} />
                     </View>
                   </View>
                 </Pressable>
@@ -517,7 +551,7 @@ export default function HomeScreen({ navigation }: Props) {
           <SectionHeader title="Produits populaires" subtitle="Boulangerie, gâteaux, douceurs et produits maison" action="Explorer" onPress={() => navigation.navigate('Products')} />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
             {featuredProducts.map((product) => (
-              <View key={product.id} style={styles.productCard}>
+              <Pressable key={product.id} style={styles.productCard} onPress={() => setSelectedProduct(product)}>
                 <Image source={{ uri: product.imageUrl }} style={styles.productImage} />
                 {product.badge ? (
                   <View style={styles.productBadge}>
@@ -532,7 +566,7 @@ export default function HomeScreen({ navigation }: Props) {
                     <Text style={styles.productDistance}>{product.distanceKm.toFixed(1)} km</Text>
                   </View>
                 </View>
-              </View>
+              </Pressable>
             ))}
           </ScrollView>
         </View>
@@ -653,6 +687,20 @@ export default function HomeScreen({ navigation }: Props) {
           </LinearGradient>
         </Pressable>
       </Animated.View>
+
+      {/* Fiche produit */}
+      <ProductDetailModal
+        visible={selectedProduct != null}
+        onClose={() => setSelectedProduct(null)}
+        id={selectedProduct?.id ?? ''}
+        imageUrl={selectedProduct?.imageUrl}
+        name={selectedProduct?.name ?? ''}
+        price={selectedProduct?.price ?? 0}
+        badge={selectedProduct?.badge}
+        categoryLabel={selectedProduct?.category}
+        seller={selectedProduct?.seller}
+        onAddToCart={(quantity) => handleProductModalAdd(quantity)}
+      />
     </View>
   );
 }
@@ -693,7 +741,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   heroSectionOuter: {
-    marginTop: spacing.lg,
+    marginTop: spacing.xl,
   },
   heroShellGlow1: {
     position: 'absolute',
@@ -728,7 +776,7 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
   welcomeText: {
-    fontSize: 26,
+    fontSize: 20,
     color: '#fff',
     fontFamily: fonts.titleBold,
     marginTop: 4,
@@ -801,43 +849,55 @@ const styles = StyleSheet.create({
   searchMiniBadgeText: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 11 },
   heroList: { paddingHorizontal: spacing.lg, paddingTop: 0 },
   heroCard: {
-    width: 310,
-    height: 210,
+    width: HERO_CARD_WIDTH,
+    height: 250,
     marginRight: spacing.md,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     overflow: 'hidden',
     backgroundColor: colors.surface,
+    ...shadows.lg,
   },
   heroImage: { width: '100%', height: '100%' },
-  heroOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 140 },
+  heroOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
   heroBadge: {
     position: 'absolute',
     top: spacing.md,
     left: spacing.md,
-    backgroundColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: colors.primary,
     borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    ...shadows.glow(colors.primary),
   },
-  heroBadgeText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11 },
-  heroContent: { position: 'absolute', left: spacing.md, right: spacing.md, bottom: spacing.md },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 22, lineHeight: 28 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.8)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  heroBadgeText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
+  heroContent: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.lg },
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 19, lineHeight: 24 },
+  heroSubtitle: { color: 'rgba(255,255,255,0.85)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6, lineHeight: 18 },
   heroCta: {
     marginTop: spacing.md,
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
-    backgroundColor: 'rgba(254,100,0,0.9)',
+    backgroundColor: '#fff',
     borderRadius: radius.full,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingLeft: 16,
+    paddingRight: 6,
+    paddingVertical: 6,
+    ...shadows.md,
   },
-  heroCtaText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 13 },
+  heroCtaText: { color: colors.secondary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  heroCtaIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   heroDots: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: spacing.md },
-  heroDot: { height: 8, borderRadius: 999, backgroundColor: '#fff' },
-  sectionBlock: { marginTop: spacing.lg },
+  heroDot: { height: 8, borderRadius: 999, backgroundColor: colors.primary },
+  sectionBlock: { marginTop: spacing.xxl },
   sectionHeadingRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -846,10 +906,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     gap: spacing.md,
   },
-  sectionTitle: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 22 },
-  sectionSubtitle: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 4, lineHeight: 18 },
-  sectionHint: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 13, marginTop: 6 },
-  sectionAction: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 13, marginTop: 6 },
+  sectionTitle: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 16 },
+  sectionSubtitle: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12, marginTop: 4, lineHeight: 17 },
+  sectionHint: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 12, marginTop: 6 },
+  sectionAction: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 12, marginTop: 6 },
   categoriesRow: { paddingHorizontal: spacing.lg, gap: spacing.sm },
   categoryCard: {
     width: 96,
@@ -904,8 +964,8 @@ const styles = StyleSheet.create({
   },
   restaurantRatingText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 12 },
   restaurantBody: { padding: spacing.md, gap: 8 },
-  restaurantName: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 18 },
-  restaurantMeta: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 13 },
+  restaurantName: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 16 },
+  restaurantMeta: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12 },
   metricsRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   metricPill: {
     flexDirection: 'row',
@@ -936,19 +996,19 @@ const styles = StyleSheet.create({
   },
   productBadgeText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11 },
   productBody: { padding: spacing.md },
-  productName: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 15 },
-  productSeller: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12, marginTop: 4 },
+  productName: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 14 },
+  productSeller: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 11, marginTop: 4 },
   productFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm },
-  productPrice: { color: colors.primary, fontFamily: fonts.titleBold, fontSize: 14 },
-  productDistance: { color: colors.textMuted, fontFamily: fonts.bodyBold, fontSize: 12 },
+  productPrice: { color: colors.primary, fontFamily: fonts.titleBold, fontSize: 13 },
+  productDistance: { color: colors.textMuted, fontFamily: fonts.bodyBold, fontSize: 11 },
   parcelBanner: {
     marginHorizontal: spacing.lg,
     borderRadius: radius.xl,
     padding: spacing.lg,
     ...shadows.lg,
   },
-  parcelTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 24, marginTop: spacing.md, lineHeight: 30 },
-  parcelSubtitle: { color: 'rgba(255,255,255,0.76)', fontFamily: fonts.bodyMedium, fontSize: 14, lineHeight: 20, marginTop: spacing.sm },
+  parcelTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 18, marginTop: spacing.md, lineHeight: 24 },
+  parcelSubtitle: { color: 'rgba(255,255,255,0.76)', fontFamily: fonts.bodyMedium, fontSize: 13, lineHeight: 19, marginTop: spacing.sm },
   parcelOptions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.lg },
   parcelOptionCard: {
     flex: 1,
@@ -1028,8 +1088,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  driverCtaTitle: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 18 },
-  driverCtaSubtitle: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 5, lineHeight: 18 },
+  driverCtaTitle: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 16 },
+  driverCtaSubtitle: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12, marginTop: 5, lineHeight: 17 },
   driverCtaArrow: {
     width: 42,
     height: 42,
@@ -1051,7 +1111,7 @@ const styles = StyleSheet.create({
   nearbyImage: { width: 92, height: 92, borderRadius: radius.md, backgroundColor: colors.border },
   nearbyBody: { flex: 1 },
   nearbyTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm },
-  nearbyName: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 15 },
+  nearbyName: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 14 },
   nearbyDistanceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1106,7 +1166,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   badgeMiniText: { color: colors.primary, fontSize: 10, fontFamily: fonts.bodyBold },
-  cartBarText: { color: '#fff', fontSize: 16, fontFamily: fonts.titleBold },
+  cartBarText: { color: '#fff', fontSize: 15, fontFamily: fonts.titleBold },
   cartBarPriceWrapper: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  cartBarPrice: { color: '#fff', fontSize: 16, fontFamily: fonts.titleBold },
+  cartBarPrice: { color: '#fff', fontSize: 15, fontFamily: fonts.titleBold },
 });

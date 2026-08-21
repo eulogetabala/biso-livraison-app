@@ -3,10 +3,11 @@ import { View, StyleSheet, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import HomeScreen from '../screens/HomeScreen';
-import OrdersScreen from '../screens/OrdersScreen';
+import FavoritesScreen from '../screens/FavoritesScreen';
+import CartScreen from '../screens/CartScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import { useCart } from '../lib/cart';
-import { colors, radius, fonts, shadows, spacing } from '../theme';
+import { colors, radius, fonts, shadows } from '../theme';
 import type { MainTabParamList } from './types';
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -81,12 +82,22 @@ export default function MainTabs() {
         }}
       />
       <Tab.Screen
-        name="Orders"
-        component={OrdersScreen}
+        name="Favorites"
+        component={FavoritesScreen}
         options={{
-          tabBarLabel: 'Commandes',
+          tabBarLabel: 'Favoris',
           tabBarIcon: ({ color, focused }) => (
-            <TabIcon name="receipt" color={color} focused={focused} badge={count} />
+            <TabIcon name="heart" color={color} focused={focused} />
+          ),
+        }}
+      />
+      <Tab.Screen
+        name="Cart"
+        component={CartScreen}
+        options={{
+          tabBarLabel: 'Panier',
+          tabBarIcon: ({ color, focused }) => (
+            <TabIcon name="cart" color={color} focused={focused} badge={count} />
           ),
         }}
       />

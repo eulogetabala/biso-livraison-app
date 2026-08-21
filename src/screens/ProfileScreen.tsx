@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import {
   Animated,
   Image,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,6 +15,7 @@ import { useAuth } from '../lib/auth';
 import { assetUrl } from '../lib/api';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
+import PhoneNumber from '../components/PhoneNumber';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -107,13 +109,6 @@ export default function ProfileScreen({ navigation }: Props) {
         </LinearGradient>
       </Animated.View>
 
-      {/* Stats Row */}
-      <Animated.View style={[styles.statsRow, { opacity: fadeIn }]}>
-        <StatCard icon="person" iconBg={colors.secondaryLight} iconColor={colors.secondary} label={ROLE_LABELS[user.role] ?? 'Membre'} value="Actif" />
-        <StatCard icon="calendar" iconBg="#E0F2FE" iconColor="#0EA5E9" label="Membre depuis" value="2024" />
-        <StatCard icon="receipt" iconBg={colors.primaryLight} iconColor={colors.primary} label="Commandes" value="—" />
-      </Animated.View>
-
       {/* Info Section */}
       <Animated.View style={[styles.infoCard, { opacity: fadeIn }]}>
         <Text style={styles.infoTitle}>Informations personnelles</Text>
@@ -132,10 +127,24 @@ export default function ProfileScreen({ navigation }: Props) {
             icon="call"
             iconBg="#D1FAE5"
             iconColor="#059669"
-            value={user.phone}
+            value={<PhoneNumber phone={user.phone} />}
             isLast
           />
         ) : null}
+      </Animated.View>
+
+      {/* Menu */}
+      <Animated.View style={[styles.menuCard, { opacity: fadeIn }]}>
+        <Pressable style={styles.menuRow} onPress={() => navigation.navigate('Orders')}>
+          <View style={[styles.menuIconWrap, { backgroundColor: colors.primaryLight }]}>
+            <Ionicons name="receipt-outline" size={19} color={colors.primary} />
+          </View>
+          <Text style={styles.menuLabel}>Mes commandes</Text>
+          <View style={styles.menuBadge}>
+            <Text style={styles.menuBadgeText}>Suivre</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </Pressable>
       </Animated.View>
 
       {/* Logout */}
@@ -147,22 +156,8 @@ export default function ProfileScreen({ navigation }: Props) {
   );
 }
 
-function StatCard({ icon, iconBg, iconColor, label, value }: {
-  icon: string; iconBg: string; iconColor: string; label: string; value: string;
-}) {
-  return (
-    <View style={styles.statCard}>
-      <View style={[styles.statIcon, { backgroundColor: iconBg }]}>
-        <Ionicons name={icon as any} size={18} color={iconColor} />
-      </View>
-      <Text style={styles.statValue}>{value}</Text>
-      <Text style={styles.statLabel}>{label}</Text>
-    </View>
-  );
-}
-
 function InfoRow({ icon, iconBg, iconColor, value, isLast }: {
-  icon: string; iconBg: string; iconColor: string; value: string; isLast?: boolean;
+  icon: string; iconBg: string; iconColor: string; value: React.ReactNode; isLast?: boolean;
 }) {
   return (
     <View style={[styles.infoRow, !isLast && styles.infoRowBorder]}>
@@ -224,12 +219,12 @@ const styles = StyleSheet.create({
     borderColor: colors.surface,
   },
   avatarInitials: {
-    fontSize: 28,
+    fontSize: 22,
     color: '#FFFFFF',
     fontFamily: fonts.titleBold,
   },
   userName: {
-    fontSize: 22,
+    fontSize: 18,
     color: '#FFFFFF',
     fontFamily: fonts.titleBold,
     marginBottom: spacing.xs,
@@ -247,42 +242,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.primary,
     fontFamily: fonts.bodyBold,
-  },
-
-  // Stats
-  statsRow: {
-    flexDirection: 'row',
-    marginHorizontal: spacing.lg,
-    marginTop: -spacing.md,
-    gap: spacing.sm,
-  },
-  statCard: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    borderRadius: radius.md,
-    padding: spacing.sm + 2,
-    alignItems: 'center',
-    ...shadows.md,
-  },
-  statIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.xs,
-  },
-  statValue: {
-    fontSize: 15,
-    color: colors.text,
-    fontFamily: fonts.titleBold,
-  },
-  statLabel: {
-    fontSize: 10,
-    color: colors.textMuted,
-    fontFamily: fonts.bodyMedium,
-    marginTop: 2,
-    textAlign: 'center',
   },
 
   // Info
@@ -323,6 +282,46 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontFamily: fonts.bodyMedium,
     flex: 1,
+  },
+
+  // Menu
+  menuCard: {
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.md,
+    ...shadows.sm,
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: 16,
+  },
+  menuIconWrap: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  menuLabel: {
+    flex: 1,
+    fontSize: 15,
+    color: colors.text,
+    fontFamily: fonts.bodyMedium,
+  },
+  menuBadge: {
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  menuBadgeText: {
+    fontSize: 11,
+    color: colors.primary,
+    fontFamily: fonts.bodyBold,
   },
 
   // Logout

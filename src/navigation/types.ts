@@ -1,11 +1,20 @@
+import type { NavigatorScreenParams } from '@react-navigation/native';
+
 export type RootStackParamList = {
   Splash: undefined;
   Onboarding: undefined;
   Login: undefined;
   Register: undefined;
-  Main: undefined;
+  Otp: {
+    phone: string;
+    firstName: string;
+    lastName: string;
+    password: string;
+  };
+  Main: NavigatorScreenParams<MainTabParamList> | undefined;
   Restaurant: { id: string; name: string };
   Checkout: undefined;
+  Orders: undefined;
   OrderDetail: { id: string };
   Drivers: undefined;
   DriverDetail: { id: string };
@@ -18,6 +27,7 @@ export type RootStackParamList = {
 
 export type MainTabParamList = {
   Home: undefined;
-  Orders: undefined;
+  Favorites: undefined;
+  Cart: undefined;
   Profile: undefined;
 };

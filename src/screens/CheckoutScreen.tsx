@@ -13,15 +13,17 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useCreateOrderMutation } from '../graphql/operations';
 import type { PaymentMethod } from '../graphql/types';
 import { assetUrl } from '../lib/api';
-import { useCart } from '../lib/cart';
+import { useCart, lineUnitPrice } from '../lib/cart';
 import { MOCK_MODE } from '../config/mock';
 import { createMockOrder } from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { EmptyState, formatPrice } from '../components/ui';
+import FloatingBackButton from '../components/FloatingBackButton';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -202,6 +204,7 @@ function AnimatedPrice({ value }: { value: number }) {
 }
 
 export default function CheckoutScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
   const { cart, subtotal, total, clear } = useCart();
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
@@ -294,11 +297,15 @@ export default function CheckoutScreen({ navigation }: Props) {
       style={s.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
+      <FloatingBackButton navigation={navigation} />
       <ScrollView
-        contentContainerStyle={s.container}
+        contentContainerStyle={[s.container, { paddingTop: insets.top + 52 }]}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
+        {/* Title */}
+        <Text style={s.pageTitle}>Panier</Text>
+
         {/* Stepper */}
         <Stepper activeStep={activeStep} />
 
@@ -321,7 +328,7 @@ export default function CheckoutScreen({ navigation }: Props) {
           </View>
 
           {cart.lines.map((line) => (
-            <View key={line.menuItem.id} style={s.line}>
+            <View key={line.key} style={s.line}>
               <View style={s.lineImageWrap}>
                 {line.menuItem.imageUrl ? (
                   <Image source={{ uri: assetUrl(line.menuItem.imageUrl) }} style={s.lineImage} />
@@ -338,11 +345,18 @@ export default function CheckoutScreen({ navigation }: Props) {
                 <Text style={s.lineName} numberOfLines={1}>
                   {line.menuItem.name}
                 </Text>
+                {line.supplements.length > 0 ? (
+                  <Text style={s.lineSupplements} numberOfLines={1}>
+                    + {line.supplements.map((sup) => sup.name).join(', ')}
+                  </Text>
+                ) : null}
                 <Text style={s.lineSubtext}>
-                  {formatPrice(line.menuItem.price)} × {line.quantity}
+                  {formatPrice(lineUnitPrice(line))} × {line.quantity}
                 </Text>
               </View>
-              <Text style={s.linePrice}>{formatPrice(line.quantity * line.menuItem.price)}</Text>
+              <Text style={s.linePrice}>
+                {formatPrice(lineUnitPrice(line) * line.quantity)}
+              </Text>
             </View>
           ))}
 
@@ -500,7 +514,15 @@ export default function CheckoutScreen({ navigation }: Props) {
 const s = StyleSheet.create({
   flex: { flex: 1, backgroundColor: colors.background },
   emptyContainer: { flex: 1, backgroundColor: colors.background, padding: spacing.lg },
-  container: { padding: spacing.lg, paddingTop: spacing.md },
+  container: { padding: spacing.lg, paddingTop: spacing.md, paddingBottom: 120 },
+
+  pageTitle: {
+    fontFamily: fonts.titleBold,
+    fontSize: 22,
+    color: colors.secondary,
+    textAlign: 'center',
+    marginBottom: spacing.lg,
+  },
 
   // Stepper
   stepperRow: {
@@ -576,7 +598,7 @@ const s = StyleSheet.create({
     marginBottom: spacing.md,
   },
   cardTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '600',
     color: colors.secondary,
     fontFamily: fonts.titleSemiBold,
@@ -643,6 +665,12 @@ const s = StyleSheet.create({
     color: colors.secondary,
     fontFamily: fonts.titleSemiBold,
   },
+  lineSupplements: {
+    fontSize: 11,
+    color: colors.primary,
+    marginTop: 2,
+    fontFamily: fonts.bodyMedium,
+  },
   lineSubtext: {
     fontSize: 12,
     color: colors.textMuted,
@@ -704,7 +732,7 @@ const s = StyleSheet.create({
     fontFamily: fonts.titleBold,
   },
   summaryTotalValue: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '700',
     color: colors.primary,
     fontFamily: fonts.titleBold,
@@ -826,7 +854,7 @@ const s = StyleSheet.create({
     transform: [{ skewX: '-20deg' }],
   },
   submitText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: '#fff',
     fontFamily: fonts.titleBold,

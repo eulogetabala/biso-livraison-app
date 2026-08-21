@@ -2,16 +2,19 @@ import React, { useEffect, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { MockDriver } from '../mocks/data';
 import { getMockDrivers } from '../mocks/service';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
+import FloatingBackButton from '../components/FloatingBackButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Drivers'>;
 
 export default function DriversScreen({ navigation }: Props) {
   const [drivers, setDrivers] = useState<MockDriver[]>([]);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     getMockDrivers().then(setDrivers);
@@ -19,10 +22,11 @@ export default function DriversScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={styles.hero}>
+      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={[styles.hero, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.heroTitle}>Livreurs disponibles</Text>
-        <Text style={styles.heroSubtitle}>Choisis un coursier express, moto ou interville.</Text>
       </LinearGradient>
+
+      <FloatingBackButton navigation={navigation} />
 
       <FlatList
         data={drivers}
@@ -73,15 +77,15 @@ function Meta({ icon, text }: { icon: any; text: string }) {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   hero: {
-    paddingTop: 24,
-    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
     paddingBottom: spacing.xl,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 26 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.72)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6 },
-  list: { padding: spacing.lg, gap: spacing.md },
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 20, textAlign: 'center' },
+  list: { padding: spacing.lg, gap: spacing.md, paddingBottom: 120 },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,

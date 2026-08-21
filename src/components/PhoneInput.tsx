@@ -4,9 +4,9 @@ import { colors, radius, fonts } from '../theme';
 
 type Props = {
   value: string;
-  countryCode: string;
+  countryCode?: string;
   onChange: (val: string) => void;
-  onCountryChange: (code: string) => void;
+  onCountryChange?: (code: string) => void;
   placeholder?: string;
   onFocus?: () => void;
   onBlur?: () => void;

@@ -1,162 +1,183 @@
 import React from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ImageBackground, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
+import FloatingBackButton from '../components/FloatingBackButton';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Categories'>;
 
 const CATEGORIES = [
-  { key: 'boissons', label: 'Boissons', subtitle: 'Jus frais, sodas, eau, boissons locales', lib: 'ion', icon: 'wine-outline', bg: '#E0F2FE', color: '#0284C7' },
-  { key: 'boucherie', label: 'Boucherie', subtitle: 'Viandes fraîches et découpes prêtes à cuisiner', lib: 'mci', icon: 'food-steak', bg: '#FEE2E2', color: '#DC2626' },
-  { key: 'volailles', label: 'Volailles', subtitle: 'Poulet, pintade et produits fermiers', lib: 'mci', icon: 'food-drumstick-outline', bg: '#FEF3C7', color: '#D97706' },
-  { key: 'fruits', label: 'Fruits', subtitle: 'Mangues, bananes, ananas et fruits de saison', lib: 'ion', icon: 'nutrition-outline', bg: '#ECFCCB', color: '#65A30D' },
-  { key: 'legumes', label: 'Légumes', subtitle: 'Produits du potager, feuilles et assortiments', lib: 'mci', icon: 'carrot', bg: '#DCFCE7', color: '#16A34A' },
-  { key: 'epicerie', label: 'Epicerie', subtitle: 'Essentiels du quotidien et paniers famille', lib: 'feather', icon: 'shopping-bag', bg: '#EDE9FE', color: '#7C3AED' },
-  { key: 'boulangerie', label: 'Boulangerie', subtitle: 'Pain, croissants et douceurs du matin', lib: 'mci', icon: 'bread-slice-outline', bg: '#FFF7E6', color: '#D97706' },
-  { key: 'dessert', label: 'Desserts', subtitle: 'Gâteaux maison et créations sucrées', lib: 'mci', icon: 'cake-variant-outline', bg: '#FCE7F3', color: '#DB2777' },
+  {
+    key: 'boissons',
+    label: 'Boissons',
+    subtitle: 'Jus frais, sodas, eau',
+    image: 'https://images.unsplash.com/photo-1622597467836-f3285f2131b8?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'boucherie',
+    label: 'Boucherie',
+    subtitle: 'Viandes fraîches',
+    image: 'https://images.unsplash.com/photo-1607623814075-e51df1bdc82f?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'volailles',
+    label: 'Volailles',
+    subtitle: 'Poulet, pintade, fermiers',
+    image: 'https://images.unsplash.com/photo-1604503468506-a8da13d82791?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'fruits',
+    label: 'Fruits',
+    subtitle: 'Mangues, bananes, ananas',
+    image: 'https://images.unsplash.com/photo-1553279768-865429fa0078?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'legumes',
+    label: 'Légumes',
+    subtitle: 'Produits du potager',
+    image: 'https://images.unsplash.com/photo-1542838132-92c53300491e?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'epicerie',
+    label: 'Epicerie',
+    subtitle: 'Essentiels du quotidien',
+    image: 'https://images.unsplash.com/photo-1586201375761-83865001e31c?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'boulangerie',
+    label: 'Boulangerie',
+    subtitle: 'Pain, croissants du matin',
+    image: 'https://images.unsplash.com/photo-1509440159596-0249088772ff?q=80&w=900&auto=format&fit=crop',
+  },
+  {
+    key: 'dessert',
+    label: 'Desserts',
+    subtitle: 'Gâteaux et douceurs',
+    image: 'https://images.unsplash.com/photo-1578985545062-69928b1d9587?q=80&w=900&auto=format&fit=crop',
+  },
 ];
 
-const CATEGORY_ROWS = CATEGORIES.reduce<typeof CATEGORIES[number][][]>((rows, category, index) => {
-  if (index % 2 === 0) {
-    rows.push([category]);
-  } else {
-    rows[rows.length - 1].push(category);
-  }
-  return rows;
-}, []);
-
-export default function CategoriesScreen({ navigation, route }: Props) {
+export default function CategoriesScreen({ navigation }: Props) {
+  const insets = useSafeAreaInsets();
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={styles.hero}>
-        <View style={styles.heroGlow} />
-        <Text style={styles.heroEyebrow}>Catalogue</Text>
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={[styles.hero, { paddingTop: insets.top + 16 }]}>
         <Text style={styles.heroTitle}>Catégories</Text>
-        <View style={styles.heroPills}>
-          <View style={styles.heroPill}>
-            <Text style={styles.heroPillText}>8 univers</Text>
-          </View>
-          <View style={styles.heroPill}>
-            <Text style={styles.heroPillText}>Market Biso</Text>
-          </View>
-        </View>
       </LinearGradient>
 
       <View style={styles.grid}>
-        {CATEGORY_ROWS.map((row, rowIndex) => (
-          <View key={`row-${rowIndex}`} style={styles.gridRow}>
-            {row.map((category) => {
-              const selected = route.params?.selectedCategory === category.key;
-              return (
-                <Pressable
-                  key={category.key}
-                  style={[styles.card, selected && styles.cardSelected]}
-                  onPress={() => navigation.navigate('Products', { category: category.label })}
-                >
-                  <LinearGradient colors={['rgba(255,255,255,0.85)', '#FFFFFF']} style={styles.cardGradient}>
-                    <View style={[styles.cardAccent, { backgroundColor: category.bg }]} />
-                    <View style={[styles.iconWrap, { backgroundColor: category.bg }]}>
-                      {category.lib === 'mci' ? (
-                        <MaterialCommunityIcons name={category.icon as any} size={24} color={category.color} />
-                      ) : category.lib === 'feather' ? (
-                        <Feather name={category.icon as any} size={22} color={category.color} />
-                      ) : (
-                        <Ionicons name={category.icon as any} size={22} color={category.color} />
-                      )}
-                    </View>
-                    <Text style={styles.cardTitle}>{category.label}</Text>
-                    <Text style={styles.cardMeta}>Voir les produits</Text>
-                    <View style={styles.cardArrow}>
-                      <Ionicons name="arrow-forward" size={16} color="#fff" />
-                    </View>
-                  </LinearGradient>
-                </Pressable>
-              );
-            })}
-          </View>
+        {CATEGORIES.map((category) => (
+          <Pressable
+            key={category.key}
+            onPress={() => navigation.navigate('Products', { category: category.label })}
+            style={({ pressed }) => [styles.cardWrap, pressed && styles.cardPressed]}
+          >
+            <ImageBackground source={{ uri: category.image }} style={styles.card} imageStyle={styles.cardImage}>
+              <View style={styles.overlay} />
+              <View style={styles.cardContent}>
+                <View style={styles.iconBadge}>
+                  <Ionicons name="arrow-forward" size={16} color="#fff" />
+                </View>
+                <Text style={styles.cardTitle}>{category.label}</Text>
+                <Text style={styles.cardSubtitle} numberOfLines={2}>
+                  {category.subtitle}
+                </Text>
+                <View style={styles.cardFooter}>
+                  <View style={styles.countChip}>
+                    <Text style={styles.countChipText}>Explorer</Text>
+                  </View>
+                </View>
+              </View>
+            </ImageBackground>
+          </Pressable>
         ))}
       </View>
-    </ScrollView>
+      </ScrollView>
+
+      <FloatingBackButton navigation={navigation} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { paddingBottom: spacing.xxl },
+  scroll: { flex: 1 },
+  content: { paddingBottom: 120 },
   hero: {
-    paddingTop: 24,
-    paddingHorizontal: spacing.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
     paddingBottom: spacing.xl,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
     overflow: 'hidden',
   },
-  heroGlow: {
-    position: 'absolute',
-    width: 180,
-    height: 180,
-    borderRadius: 90,
-    backgroundColor: 'rgba(254,100,0,0.16)',
-    top: -30,
-    right: -40,
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 22 },
+
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    padding: spacing.lg,
+    marginTop: spacing.xl,
+    gap: spacing.md,
   },
-  heroEyebrow: { color: 'rgba(255,255,255,0.72)', fontFamily: fonts.bodyBold, fontSize: 12, textTransform: 'uppercase', letterSpacing: 1.4 },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 30, marginTop: 6 },
-  heroPills: { flexDirection: 'row', gap: 10, marginTop: spacing.md },
-  heroPill: {
-    backgroundColor: 'rgba(255,255,255,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  heroPillText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 12 },
-  grid: { padding: spacing.lg, marginTop: spacing.xs, gap: spacing.md },
-  gridRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.md },
-  card: {
-    flex: 1,
+  cardWrap: {
+    width: '48%',
+    flexGrow: 1,
     borderRadius: radius.lg,
     ...shadows.md,
+  },
+  cardPressed: {
+    transform: [{ scale: 0.97 }],
+    opacity: 0.92,
+  },
+  card: {
+    height: 190,
+    borderRadius: radius.lg,
     overflow: 'hidden',
   },
-  cardSelected: {
-    borderWidth: 1.5,
-    borderColor: colors.primary,
+  cardImage: {
+    borderRadius: radius.lg,
   },
-  cardGradient: {
-    padding: spacing.lg,
-    minHeight: 176,
-  },
-  cardAccent: {
+  overlay: {
     position: 'absolute',
-    width: 72,
-    height: 72,
-    borderRadius: 24,
-    top: -10,
-    right: -10,
-    opacity: 0.75,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  iconWrap: {
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+  cardContent: {
+    flex: 1,
+    padding: spacing.md,
+    justifyContent: 'space-between',
+  },
+  iconBadge: {
+    alignSelf: 'flex-end',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
   },
-  cardTitle: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 18 },
-  cardMeta: { color: colors.textMuted, fontFamily: fonts.bodyBold, fontSize: 12, marginTop: 6 },
-  cardArrow: {
-    marginTop: 'auto',
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    backgroundColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cardTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 16 },
+  cardSubtitle: { color: 'rgba(255,255,255,0.82)', fontFamily: fonts.bodyMedium, fontSize: 12, marginTop: 2, lineHeight: 16 },
+  cardFooter: { marginTop: spacing.sm },
+  countChip: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
   },
+  countChipText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11 },
 });

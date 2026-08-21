@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Image,
@@ -14,38 +14,38 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useLoginMutation } from '../graphql/operations';
 import { useAuth } from '../lib/auth';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
-import PhoneInput from '../components/PhoneInput';
-import { MOCK_MODE } from '../config/mock';
-import { mockLogin } from '../mocks/service';
 import { Ionicons } from '@expo/vector-icons';
+import { MOCK_MODE } from '../config/mock';
+import { mockRegister, mockRequestOtp, mockVerifyOtp } from '../mocks/service';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
 const { width } = Dimensions.get('window');
 
-type Props = NativeStackScreenProps<RootStackParamList, 'Login'>;
+type Props = NativeStackScreenProps<RootStackParamList, 'Otp'>;
 
-export default function LoginScreen({ navigation }: Props) {
+const CODE_LENGTH = 6;
+
+export default function OtpScreen({ navigation, route }: Props) {
+  const { phone, firstName, lastName, password } = route.params;
   const { setTokenAndUser } = useAuth();
-  const [phone, setPhone] = useState('');
-  const [countryCode, setCountryCode] = useState('+242');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+
+  const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [login, { loading }] = useLoginMutation();
+  const [devCode, setDevCode] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState(0);
+  const [verifying, setVerifying] = useState(false);
+  const [resending, setResending] = useState(false);
 
   const cardScale = useRef(new Animated.Value(0.92)).current;
   const cardOpacity = useRef(new Animated.Value(0)).current;
   const cardTranslateY = useRef(new Animated.Value(50)).current;
   const logoScale = useRef(new Animated.Value(0.5)).current;
   const logoOpacity = useRef(new Animated.Value(0)).current;
-
-  const passwordFocusAnim = useRef(new Animated.Value(0)).current;
-  const phoneFocusAnim = useRef(new Animated.Value(0)).current;
+  const codeFocus = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.stagger(150, [
@@ -61,65 +61,83 @@ export default function LoginScreen({ navigation }: Props) {
     ]).start();
   }, [cardScale, cardOpacity, cardTranslateY, logoScale, logoOpacity]);
 
+  useEffect(() => {
+    if (MOCK_MODE) {
+      sendCode();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
+    return () => clearTimeout(t);
+  }, [countdown]);
+
   const animateInput = (anim: Animated.Value, toValue: number) => {
     Animated.timing(anim, { toValue, duration: 200, useNativeDriver: false }).start();
   };
 
-  const handleSubmit = async () => {
+  const makeBorder = (anim: Animated.Value) =>
+    anim.interpolate({ inputRange: [0, 1], outputRange: ['transparent', colors.primary] });
+
+  const sendCode = async () => {
     setError(null);
-    if (!phone.trim() || !password) {
-      setError('Veuillez remplir tous les champs.');
+    try {
+      const result = await mockRequestOtp(phone);
+      setDevCode(result.devCode);
+      setCountdown(30);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Impossible d’envoyer le code.');
+    }
+  };
+
+  const handleVerify = async () => {
+    setError(null);
+    if (!/^\d{6}$/.test(code)) {
+      setError('Saisissez le code à 6 chiffres reçu par SMS.');
       return;
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setVerifying(true);
     try {
-      if (MOCK_MODE) {
-        const result = await mockLogin(`${countryCode}${phone}`.replace(/\s+/g, ''), password);
-        await setTokenAndUser(result.accessToken, result.user);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        navigation.replace('Main');
-        return;
-      }
-      const { data } = await login({
-        variables: {
-          input: { email: `${countryCode}${phone}`.replace(/\s+/g, '') + '@phone.biso', password },
-        },
-      });
-      if (!data?.login) throw new Error('Réponse invalide du serveur.');
-      await setTokenAndUser(data.login.accessToken, data.login.user);
+      await mockVerifyOtp(phone, code);
+      const result = await mockRegister({ firstName, lastName, phone, password });
+      await setTokenAndUser(result.accessToken, result.user);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       navigation.replace('Main');
     } catch (e) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const message =
-        e instanceof Error && e.message.includes('Invalid credentials')
-          ? 'Numéro ou mot de passe incorrect.'
-          : 'Connexion impossible. Vérifiez votre connexion et réessayez.';
+        e instanceof Error && e.message.toLowerCase().includes('expir')
+          ? 'Ce code a expiré. Renvoyez un nouveau code.'
+          : e instanceof Error && e.message.toLowerCase().includes('invalide')
+            ? 'Code invalide. Vérifiez le code reçu.'
+            : 'Vérification impossible. Réessayez.';
       setError(message);
+    } finally {
+      setVerifying(false);
     }
   };
 
-  const phoneBorderColor = phoneFocusAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['transparent', colors.primary],
-  });
-
-  const passwordBorderColor = passwordFocusAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: ['transparent', colors.primary],
-  });
+  const handleResend = async () => {
+    setResending(true);
+    setCode('');
+    await sendCode();
+    setResending(false);
+  };
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        {/* Gradient hero background */}
+        {/* Gradient hero */}
         <LinearGradient
           colors={[colors.secondary, colors.secondaryDark, '#000D2B']}
           style={styles.heroGradient}
         >
           <View style={styles.decorCircle1} />
           <View style={styles.decorCircle2} />
-          <View style={styles.decorCircle3} />
         </LinearGradient>
 
         {/* Logo */}
@@ -134,8 +152,8 @@ export default function LoginScreen({ navigation }: Props) {
               </View>
             </LinearGradient>
           </View>
-          <Text style={styles.appName}>Biso Livraison</Text>
-          <Text style={styles.tagline}>Connectez-vous pour commander</Text>
+          <Text style={styles.appName}>Vérification du numéro</Text>
+          <Text style={styles.tagline}>Un code a été envoyé au {phone}</Text>
         </Animated.View>
 
         {/* Card */}
@@ -148,50 +166,33 @@ export default function LoginScreen({ navigation }: Props) {
             },
           ]}
         >
-          {/* Phone */}
-          <View style={styles.inputGroup}>
-            <Text style={styles.label}>Numéro de téléphone</Text>
-            <Animated.View style={[styles.inputWrapper, { borderColor: phoneBorderColor }]}>
-              <View style={styles.inputIconCircle}>
-                <Ionicons name="call-outline" size={16} color={colors.primary} />
-              </View>
-              <PhoneInput
-                value={phone}
-                countryCode={countryCode}
-                onChange={setPhone}
-                onCountryChange={setCountryCode}
-                placeholder="06 XXX XX XX"
-                onFocus={() => animateInput(phoneFocusAnim, 1)}
-                onBlur={() => animateInput(phoneFocusAnim, 0)}
-              />
-            </Animated.View>
-          </View>
+          {MOCK_MODE && devCode ? (
+            <View style={styles.devBanner}>
+              <Ionicons name="flask-outline" size={16} color={colors.primary} />
+              <Text style={styles.devBannerText}>
+                Mode démo — votre code : <Text style={styles.devCode}>{devCode}</Text>
+              </Text>
+            </View>
+          ) : null}
 
-          {/* Password */}
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Mot de passe</Text>
-            <Animated.View style={[styles.inputWrapper, { borderColor: passwordBorderColor }]}>
+            <Text style={styles.label}>Code de vérification</Text>
+            <Animated.View style={[styles.inputWrapper, { borderColor: makeBorder(codeFocus) }]}>
               <View style={styles.inputIconCircle}>
-                <Ionicons name="lock-closed-outline" size={16} color={colors.primary} />
+                <Ionicons name="keypad-outline" size={16} color={colors.primary} />
               </View>
               <TextInput
                 style={styles.input}
-                value={password}
-                onChangeText={setPassword}
-                placeholder="••••••••"
+                value={code}
+                onChangeText={(t) => setCode(t.replace(/[^\d]/g, '').slice(0, CODE_LENGTH))}
+                placeholder="••••••"
                 placeholderTextColor={colors.textMuted}
-                secureTextEntry={!showPassword}
-                autoComplete="password"
-                onFocus={() => animateInput(passwordFocusAnim, 1)}
-                onBlur={() => animateInput(passwordFocusAnim, 0)}
+                keyboardType="number-pad"
+                maxLength={CODE_LENGTH}
+                autoFocus
+                onFocus={() => animateInput(codeFocus, 1)}
+                onBlur={() => animateInput(codeFocus, 0)}
               />
-              <Pressable style={styles.eyeBtn} onPress={() => setShowPassword(!showPassword)}>
-                <Ionicons
-                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                  size={20}
-                  color={colors.textMuted}
-                />
-              </Pressable>
             </Animated.View>
           </View>
 
@@ -202,23 +203,31 @@ export default function LoginScreen({ navigation }: Props) {
             </View>
           ) : null}
 
-          <Button title="Se connecter" onPress={handleSubmit} loading={loading} style={styles.submit} />
+          <Button
+            title="Vérifier et créer mon compte"
+            onPress={handleVerify}
+            loading={verifying}
+            style={styles.submit}
+            icon={<Ionicons name="shield-checkmark" size={18} color="#fff" />}
+          />
+
+          <View style={styles.resendRow}>
+            <Text style={styles.resendText}>
+              {countdown > 0
+                ? `Renvoyer le code dans ${countdown}s`
+                : "Vous n'avez pas reçu le code ? "}
+            </Text>
+            {countdown === 0 ? (
+              <Pressable onPress={handleResend} disabled={resending} hitSlop={8}>
+                <Text style={styles.resendLink}>{resending ? 'Envoi…' : 'Renvoyer'}</Text>
+              </Pressable>
+            ) : null}
+          </View>
 
           <View style={styles.trustRow}>
             <Ionicons name="shield-checkmark" size={14} color={colors.success} />
-            <Text style={styles.trustText}>Connexion sécurisée et chiffrée</Text>
+            <Text style={styles.trustText}>Ce code confirme que le numéro vous appartient</Text>
           </View>
-
-          <View style={styles.dividerRow}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>ou</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <Pressable style={styles.registerBtn} onPress={() => navigation.navigate('Register')}>
-            <Text style={styles.registerBtnText}>Créer un compte</Text>
-            <Ionicons name="arrow-forward" size={16} color={colors.primary} />
-          </Pressable>
         </Animated.View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -237,7 +246,7 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     right: 0,
-    height: 320,
+    height: 300,
     borderBottomLeftRadius: 40,
     borderBottomRightRadius: 40,
     overflow: 'hidden',
@@ -259,15 +268,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.04)',
     bottom: -30,
     left: -30,
-  },
-  decorCircle3: {
-    position: 'absolute',
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(254,100,0,0.06)',
-    top: 80,
-    left: width * 0.6,
   },
   logoArea: {
     alignItems: 'center',
@@ -306,19 +306,39 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontFamily: fonts.titleBold,
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   tagline: {
     fontSize: 13,
     color: 'rgba(255,255,255,0.65)',
     marginTop: 4,
     fontFamily: fonts.bodyMedium,
+    textAlign: 'center',
   },
   card: {
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.lg,
-    marginTop: spacing.sm,
     ...shadows.lg,
+  },
+  devBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  devBannerText: {
+    color: colors.primaryDark,
+    fontSize: 13,
+    fontFamily: fonts.bodyMedium,
+    flex: 1,
+  },
+  devCode: {
+    fontFamily: fonts.titleBold,
+    letterSpacing: 2,
   },
   inputGroup: {
     marginBottom: spacing.md,
@@ -352,15 +372,12 @@ const styles = StyleSheet.create({
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 20,
+    letterSpacing: 8,
     color: colors.text,
-    fontFamily: fonts.bodyMedium,
+    fontFamily: fonts.titleSemiBold,
     height: '100%',
     paddingVertical: 0,
-  },
-  eyeBtn: {
-    padding: 6,
-    marginLeft: 4,
   },
   errorCard: {
     flexDirection: 'row',
@@ -378,9 +395,26 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   submit: {
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     height: 56,
     borderRadius: radius.md,
+  },
+  resendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.lg,
+    gap: spacing.xs,
+  },
+  resendText: {
+    color: colors.textMuted,
+    fontSize: 14,
+    fontFamily: fonts.bodyMedium,
+  },
+  resendLink: {
+    color: colors.primary,
+    fontSize: 14,
+    fontFamily: fonts.titleSemiBold,
   },
   trustRow: {
     flexDirection: 'row',
@@ -393,39 +427,5 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontSize: 12,
     fontFamily: fonts.bodyMedium,
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: spacing.lg,
-    gap: spacing.sm,
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  dividerText: {
-    fontSize: 12,
-    color: colors.textMuted,
-    fontFamily: fonts.bodyMedium,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  registerBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    borderWidth: 1.5,
-    borderColor: colors.primary,
-    borderRadius: radius.md,
-    height: 50,
-    backgroundColor: colors.primaryLight,
-  },
-  registerBtnText: {
-    fontSize: 15,
-    color: colors.primary,
-    fontFamily: fonts.titleSemiBold,
   },
 });

@@ -1,11 +1,46 @@
 import type { CreateOrderInput, MenuItemModel, RestaurantModel, UserModel } from '../graphql/types';
+import { computeDeliveryFee, mockRestaurantDistanceKm } from '../lib/pricing';
 import { initialMockOrders, mockDrivers, mockMenuItems, mockProducts, mockRestaurants, mockUser, type MockOrder } from './data';
 
 let currentUser: UserModel = { ...mockUser };
 let orders: MockOrder[] = [...initialMockOrders];
 
+const pendingOtps = new Map<string, { code: string; expiresAt: number }>();
+
 function wait(ms = 250) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function generateOtpCode(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+/** Simule l'envoi d'un SMS OTP. En mode démo, le code est loggé et retourné pour l'UI. */
+export async function mockRequestOtp(phone: string) {
+  await wait(120);
+  const code = generateOtpCode();
+  pendingOtps.set(phone, { code, expiresAt: Date.now() + 10 * 60 * 1000 });
+  console.log(`[MOCK SMS] Code OTP pour ${phone} : ${code}`);
+  return {
+    phone,
+    expiresIn: 10 * 60,
+    devCode: code,
+  };
+}
+
+/** Vérifie le code OTP en mémoire. */
+export async function mockVerifyOtp(phone: string, code: string): Promise<boolean> {
+  await wait(180);
+  const pending = pendingOtps.get(phone);
+  if (!pending || pending.code !== code.trim()) {
+    throw new Error('Code invalide ou déjà utilisé.');
+  }
+  if (pending.expiresAt < Date.now()) {
+    pendingOtps.delete(phone);
+    throw new Error('Ce code a expiré. Veuillez en demander un nouveau.');
+  }
+  pendingOtps.delete(phone);
+  return true;
 }
 
 export async function mockLogin(phone: string, password: string) {
@@ -88,6 +123,17 @@ export function getMockRestaurantCoordinates(id: string) {
   return coordinates[id];
 }
 
+/** Coordonnées (mock) de livraison associées à chaque commande. */
+const MOCK_DELIVERY_COORDINATES: Record<string, { latitude: number; longitude: number }> = {
+  'order-1001': { latitude: -4.2722, longitude: 15.2854 },
+  'order-1002': { latitude: -4.7692, longitude: 11.8664 },
+  'order-1003': { latitude: -4.2245, longitude: 15.2388 },
+};
+
+export function getMockDeliveryCoordinates(orderId: string) {
+  return MOCK_DELIVERY_COORDINATES[orderId] ?? { latitude: -4.2634, longitude: 15.2522 };
+}
+
 export function getMockRestaurantById(id: string): RestaurantModel | undefined {
   return mockRestaurants.find((restaurant) => restaurant.id === id);
 }
@@ -108,9 +154,17 @@ export function getMockOrderById(id: string) {
 export async function createMockOrder(input: CreateOrderInput) {
   await wait(300);
   const restaurant = getMockRestaurantById(String(input.restaurantId));
-  if (!restaurant) {
+  const fallbackRestaurant = {
+    id: 'market',
+    name: 'Biso Market',
+    deliveryFee: 0,
+    imageUrl: null as string | null,
+    phone: '',
+  };
+  if (!restaurant && input.restaurantId !== 'market') {
     throw new Error('restaurant unavailable');
   }
+  const source = restaurant ?? fallbackRestaurant;
 
   const items = input.items.map((entry) => {
     const menuItem = mockMenuItems.find((item) => item.id === String(entry.menuItemId));
@@ -122,7 +176,7 @@ export async function createMockOrder(input: CreateOrderInput) {
   });
 
   const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-  const deliveryFee = restaurant.deliveryFee;
+  const deliveryFee = computeDeliveryFee(mockRestaurantDistanceKm(String(source.id)));
   const created: MockOrder = {
     id: `order-${Date.now()}`,
     status: 'PENDING',
@@ -134,10 +188,10 @@ export async function createMockOrder(input: CreateOrderInput) {
     deliveryZipCode: input.deliveryZipCode,
     createdAt: new Date().toISOString(),
     restaurant: {
-      id: restaurant.id,
-      name: restaurant.name,
-      imageUrl: restaurant.imageUrl ?? null,
-      phone: restaurant.phone,
+      id: source.id,
+      name: source.name,
+      imageUrl: source.imageUrl ?? null,
+      phone: source.phone,
     },
     items,
     payment: {

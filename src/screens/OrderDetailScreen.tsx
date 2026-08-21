@@ -14,9 +14,18 @@ import * as Haptics from 'expo-haptics';
 import { useCancelOrderMutation, useOrderQuery } from '../graphql/operations';
 import type { OrderStatus } from '../graphql/types';
 import { MOCK_MODE } from '../config/mock';
-import { cancelMockOrder, getMockOrderById } from '../mocks/service';
+import {
+  cancelMockOrder,
+  getMockDeliveryCoordinates,
+  getMockOrderById,
+  getMockRestaurantCoordinates,
+} from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
-import { Button, EmptyState, formatDateTime, formatPrice, Spinner, StatusBadge } from '../components/ui';
+import { Button, EmptyState, formatPrice, Spinner, StatusBadge } from '../components/ui';
+import FloatingBackButton from '../components/FloatingBackButton';
+import PhoneNumber from '../components/PhoneNumber';
+import DriverLiveMap from '../components/DriverLiveMap';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -34,6 +43,7 @@ const CANCELLABLE: OrderStatus[] = ['PENDING', 'CONFIRMED', 'PREPARING'];
 
 export default function OrderDetailScreen({ navigation, route }: Props) {
   const { id } = route.params;
+  const insets = useSafeAreaInsets();
   const { data, loading, error, refetch } = useOrderQuery({
     variables: { id },
     pollInterval: 5000,
@@ -42,12 +52,33 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
   const [cancelOrder, { loading: cancelling }] = useCancelOrderMutation();
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [mockRefreshTick, setMockRefreshTick] = useState(0);
+  const [mockProgress, setMockProgress] = useState(0.15);
 
   const pulseScale = useRef(new Animated.Value(0.8)).current;
   const pulseOpacity = useRef(new Animated.Value(0.8)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(30)).current;
   const totalScale = useRef(new Animated.Value(1)).current;
+
+  const order = MOCK_MODE ? getMockOrderById(String(id)) : data?.order;
+
+  useEffect(() => {
+    if (!MOCK_MODE) return;
+    if (!order) return;
+    if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
+      setMockProgress(1);
+      return;
+    }
+    const base = order.status === 'IN_TRANSIT' ? 0.35 : order.status === 'PREPARING' ? 0.12 : 0.05;
+    setMockProgress(base);
+    const interval = setInterval(() => {
+      setMockProgress((prev) => {
+        if (prev >= 0.97) return 0.97;
+        return prev + 0.03;
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [order?.status, mockRefreshTick]);
 
   useEffect(() => {
     Animated.loop(
@@ -70,8 +101,6 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
       Animated.spring(slideUp, { toValue: 0, tension: 60, friction: 12, useNativeDriver: true }),
     ]).start();
   }, [fadeIn, slideUp]);
-
-  const order = MOCK_MODE ? getMockOrderById(String(id)) : data?.order;
 
   if ((!MOCK_MODE && loading && !data)) return <Spinner />;
   if ((!MOCK_MODE && error) || !order) {
@@ -116,9 +145,22 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
 
   const currentStepIndex = STEPS.findIndex((s) => s.status === order.status);
 
+  const originCoords = order.restaurant?.id ? getMockRestaurantCoordinates(order.restaurant.id) : null;
+  const destinationCoords = getMockDeliveryCoordinates(order.id);
+  const statusLabel =
+    order.status === 'DELIVERED'
+      ? 'Livrée'
+      : order.status === 'PREPARING'
+        ? 'En préparation'
+        : order.status === 'CONFIRMED' || order.status === 'PENDING'
+          ? 'Bientôt en route'
+          : 'En livraison';
+  const showLiveMap = MOCK_MODE && originCoords && destinationCoords;
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-      <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
+    <View style={styles.container}>
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingTop: insets.top + 56 }]} showsVerticalScrollIndicator={false}>
+        <Animated.View style={{ opacity: fadeIn, transform: [{ translateY: slideUp }] }}>
 
         {/* ── Header Card ── */}
         <View style={[styles.card, shadows.md]}>
@@ -129,10 +171,7 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
             style={styles.headerGradient}
           >
             <View style={styles.headerContent}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.headerOrderId}>Commande #{order.id.slice(0, 8)}</Text>
-                <Text style={styles.headerDate}>{formatDateTime(order.createdAt)}</Text>
-              </View>
+              <Text style={styles.headerOrderId}>Commande #{order.id.slice(0, 8)}</Text>
               <StatusBadge status={order.status} />
             </View>
           </LinearGradient>
@@ -210,6 +249,26 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
           </View>
         </View>
 
+        {/* ── Live Map ── */}
+        {showLiveMap && (
+          <View style={[styles.card, { padding: spacing.md }]}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionIconWrap}>
+                <Ionicons name="navigate" size={16} color={colors.primary} />
+              </View>
+              <Text style={styles.sectionTitle}>Position du livreur</Text>
+            </View>
+            <DriverLiveMap
+              origin={originCoords}
+              destination={destinationCoords}
+              driverName={order.delivery?.driver?.firstName ? `${order.delivery.driver.firstName} ${order.delivery.driver.lastName ?? ''}` : 'Livreur'}
+              progress={mockProgress}
+              statusLabel={statusLabel}
+              etaMinutes={order.status === 'DELIVERED' ? undefined : 12}
+            />
+          </View>
+        )}
+
         {/* ── Driver Card ── */}
         {order.delivery?.driver && (
           <View style={[styles.card, shadows.lg, shadows.glow(colors.secondary)]}>
@@ -243,7 +302,7 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
                       activeOpacity={0.7}
                     >
                       <Ionicons name="call" size={14} color="#fff" />
-                      <Text style={styles.callText}>{order.delivery.driver.phone}</Text>
+                      <PhoneNumber phone={order.delivery.driver.phone} tint="#fff" size={13} />
                     </TouchableOpacity>
                   ) : (
                     <Text style={styles.driverPhoneNA}>Non renseigné</Text>
@@ -371,13 +430,16 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
         {cancelError && <Text style={styles.errorText}>{cancelError}</Text>}
 
       </Animated.View>
-    </ScrollView>
+      </ScrollView>
+      <FloatingBackButton navigation={navigation} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: spacing.xl * 2 },
+  scroll: { flex: 1 },
+  content: { padding: spacing.lg, paddingBottom: 120 },
 
   card: {
     backgroundColor: colors.surface,
@@ -397,9 +459,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerOrderId: {
-    fontSize: 20,
+    flex: 1,
+    fontSize: 16,
     fontFamily: fonts.titleBold,
     color: '#fff',
+    textAlign: 'center',
   },
   headerDate: {
     fontSize: 12,
@@ -414,7 +478,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
+    paddingTop: spacing.xl,
     paddingBottom: spacing.md,
   },
   sectionIconWrap: {
@@ -426,7 +490,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   sectionTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: fonts.titleSemiBold,
     color: colors.secondary,
   },
@@ -531,7 +595,7 @@ const styles = StyleSheet.create({
   },
   driverInitial: {
     color: '#fff',
-    fontSize: 22,
+    fontSize: 20,
     fontFamily: fonts.titleBold,
   },
   driverInfo: { flex: 1 },
@@ -550,11 +614,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: radius.full,
     alignSelf: 'flex-start',
-  },
-  callText: {
-    color: '#fff',
-    fontSize: 13,
-    fontFamily: fonts.bodyMedium,
   },
   driverPhoneNA: {
     color: 'rgba(255,255,255,0.5)',

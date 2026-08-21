@@ -19,19 +19,16 @@ import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { EmptyState, formatDateTime, formatPrice, Spinner, StatusBadge } from '../components/ui';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
-import type { CompositeScreenProps } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
-import type { MainTabParamList, RootStackParamList } from '../navigation/types';
+import type { RootStackParamList } from '../navigation/types';
+import FloatingBackButton from '../components/FloatingBackButton';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-type Props = CompositeScreenProps<
-  BottomTabScreenProps<MainTabParamList, 'Orders'>,
-  NativeStackScreenProps<RootStackParamList>
->;
+type Props = NativeStackScreenProps<RootStackParamList, 'Orders'>;
 
 const ACTIVE_STATUSES = ['PENDING', 'CONFIRMED', 'PREPARING', 'IN_TRANSIT', 'ASSIGNED'];
 const HISTORY_STATUSES = ['DELIVERED', 'CANCELLED', 'PAID'];
@@ -53,6 +50,7 @@ function getProgressIndex(status: string): number {
 export default function OrdersScreen({ navigation }: Props) {
   const [mockOrders, setMockOrders] = useState<any[]>([]);
   const [mockLoading, setMockLoading] = useState(MOCK_MODE);
+  const insets = useSafeAreaInsets();
   const { data, loading, error, refetch } = useMyOrdersQuery({
     variables: { page: 1, limit: 20 },
     skip: MOCK_MODE,
@@ -105,8 +103,10 @@ export default function OrdersScreen({ navigation }: Props) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Mes commandes</Text>
-
+      <FloatingBackButton navigation={navigation} />
+      <View style={{ height: insets.top + 44 }}>
+        <Text style={styles.pageTitle}>Mes commandes</Text>
+      </View>
       <TabBar
         activeTab={activeTab}
         indicatorAnim={indicatorAnim}
@@ -376,13 +376,12 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.background,
   },
-  title: {
-    fontSize: 26,
+  pageTitle: {
+    flex: 1,
+    textAlign: 'center',
     fontFamily: fonts.titleBold,
+    fontSize: 22,
     color: colors.secondary,
-    paddingHorizontal: spacing.lg,
-    paddingTop: spacing.lg,
-    paddingBottom: spacing.md,
   },
 
   // Tabs
@@ -422,7 +421,7 @@ const styles = StyleSheet.create({
   // List
   listContent: {
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.xxl,
+    paddingBottom: 120,
     gap: spacing.md,
   },
 

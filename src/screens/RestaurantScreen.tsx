@@ -1,17 +1,18 @@
-import React, { useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import {
   Animated,
   Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   View,
   Dimensions,
-  Platform,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMenuItemsByRestaurantQuery, useRestaurantQuery } from '../graphql/operations';
 import type { MenuItemModel, MenuItemCategory } from '../graphql/types';
 import { assetUrl } from '../lib/api';
@@ -19,7 +20,12 @@ import { useCart } from '../lib/cart';
 import { MOCK_MODE } from '../config/mock';
 import { getMockMenuByRestaurant, getMockRestaurantById } from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
+import { TAB_BAR_OFFSET } from '../components/AppTabBar';
+import { computeDeliveryFee } from '../lib/pricing';
 import { formatPrice, Spinner } from '../components/ui';
+import ProductDetailModal from '../components/ProductDetailModal';
+import PhoneNumber from '../components/PhoneNumber';
+import type { CartSupplement } from '../lib/cart';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -29,19 +35,31 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HERO_HEIGHT = 280;
 const CARD_OVERLAP = 50;
 
-const CATEGORY_LABELS: Record<MenuItemCategory, string> = {
-  APPETIZER: '🥗 Entrées',
-  MAIN_COURSE: '🍕 Plats principaux',
-  SIDE: '🍟 Accompagnements',
-  DESSERT: '🧁 Desserts',
-  DRINK: '🥤 Boissons',
-  SNACK: '🍿 Snacks',
-  FRUIT: '🍎 Fruits',
-  LUNCH: '🍱 Menus midi',
+const CATEGORY_LABELS: Record<string, string> = {
+  MAIN_COURSE: 'Plat principal',
+  SIDE: 'Accompagnement',
+  LUNCH: 'Déjeuner',
+  APPETIZER: 'Entrée',
+  DRINK: 'Boisson',
+  DESSERT: 'Dessert',
+  FRUIT: 'Fruit',
+  SNACK: 'Snack',
 };
+
+/** Regroupe les catégories du menu en onglets "grand public". */
+const MENU_GROUPS: { key: string; label: string; emoji: string; categories: MenuItemCategory[] }[] = [
+  { key: 'repas', label: 'Repas', emoji: '🍽️', categories: ['MAIN_COURSE', 'SIDE'] },
+  { key: 'dejeuner', label: 'Déjeuner', emoji: '🍱', categories: ['LUNCH'] },
+  { key: 'entrees', label: 'Entrées', emoji: '🥗', categories: ['APPETIZER'] },
+  { key: 'boissons', label: 'Boissons', emoji: '🥤', categories: ['DRINK'] },
+  { key: 'desserts', label: 'Desserts', emoji: '🧁', categories: ['DESSERT'] },
+  { key: 'fruits', label: 'Fruits', emoji: '🍎', categories: ['FRUIT'] },
+  { key: 'snacks', label: 'Snacks', emoji: '🍿', categories: ['SNACK'] },
+];
 
 export default function RestaurantScreen({ navigation, route }: Props) {
   const { id } = route.params;
+  const insets = useSafeAreaInsets();
   const { data: restaurantData, loading: restaurantLoading } = useRestaurantQuery({
     variables: { id },
     skip: MOCK_MODE,
@@ -55,16 +73,40 @@ export default function RestaurantScreen({ navigation, route }: Props) {
   const items = MOCK_MODE ? getMockMenuByRestaurant(String(id)) : menuData?.menuItemsByRestaurant.items ?? [];
   const { addItem, count, total } = useCart();
 
-  const grouped = useMemo(() => {
-    const groups = new Map<MenuItemCategory, MenuItemModel[]>();
-    for (const item of items) {
-      if (!item.isAvailable) continue;
-      const list = groups.get(item.category) ?? [];
-      list.push(item);
-      groups.set(item.category, list);
-    }
-    return groups;
+  // Distance simulée du restaurant par rapport à l'utilisateur.
+  const restaurantDistance = useMemo(() => {
+    const distances: Record<string, number> = {
+      'rest-1': 1.2,
+      'rest-2': 2.4,
+      'rest-3': 3.8,
+      'rest-4': 4.3,
+      'rest-5': 5.1,
+    };
+    return distances[String(id)] ?? 1.8;
+  }, [id]);
+
+  // Regroupe les items par groupe de menu (Repas, Boissons, ...)
+  const groups = useMemo(() => {
+    const result = MENU_GROUPS.map((group) => ({
+      ...group,
+      items: items.filter(
+        (item) => item.isAvailable && group.categories.includes(item.category),
+      ),
+    })).filter((group) => group.items.length > 0);
+    return result;
   }, [items]);
+
+  const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
+  const [selectedItem, setSelectedItem] = useState<MenuItemModel | null>(null);
+
+  // Sélectionne le premier groupe disponible par défaut.
+  useEffect(() => {
+    if (groups.length > 0 && !groups.some((g) => g.key === activeGroupKey)) {
+      setActiveGroupKey(groups[0].key);
+    }
+  }, [groups, activeGroupKey]);
+
+  const activeGroup = groups.find((g) => g.key === activeGroupKey) ?? groups[0];
 
   const scrollY = useRef(new Animated.Value(0)).current;
   const cartTranslateY = useRef(new Animated.Value(120)).current;
@@ -90,19 +132,43 @@ export default function RestaurantScreen({ navigation, route }: Props) {
     (menuItem: MenuItemModel) => {
       if (restaurant) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        addItem(menuItem, restaurant.id, restaurant.name, restaurant.deliveryFee);
+        addItem(menuItem, restaurant.id, restaurant.name, computeDeliveryFee(restaurantDistance));
       }
     },
-    [restaurant, addItem],
+    [restaurant, restaurantDistance, addItem],
+  );
+
+  // Suppléments proposés par le resto (accompagnements SIDE) pour l'item sélectionné.
+  const selectedSupplements = useMemo(
+    () =>
+      selectedItem
+        ? items.filter(
+            (item) => item.isAvailable && item.category === 'SIDE' && item.id !== selectedItem.id,
+          )
+        : [],
+    [items, selectedItem],
+  );
+
+  const showSupplements =
+    selectedItem != null &&
+    selectedItem.category !== 'DRINK' &&
+    selectedItem.category !== 'DESSERT' &&
+    selectedItem.category !== 'FRUIT' &&
+    selectedItem.category !== 'SNACK' &&
+    selectedSupplements.length > 0;
+
+  const handleModalAdd = useCallback(
+    (quantity: number, supplements: CartSupplement[]) => {
+      if (restaurant && selectedItem) {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        addItem(selectedItem, restaurant.id, restaurant.name, computeDeliveryFee(restaurantDistance), supplements, quantity);
+        setSelectedItem(null);
+      }
+    },
+    [restaurant, selectedItem, restaurantDistance, addItem],
   );
 
   if ((!MOCK_MODE && restaurantLoading) || (!MOCK_MODE && menuLoading)) return <Spinner />;
-
-  const sections = Array.from(grouped.entries()).map(([category, categoryItems]) => ({
-    key: category,
-    title: CATEGORY_LABELS[category] ?? category,
-    data: categoryItems,
-  }));
 
   const coverUrl = assetUrl(restaurant?.coverImageUrl ?? restaurant?.imageUrl);
 
@@ -124,12 +190,6 @@ export default function RestaurantScreen({ navigation, route }: Props) {
     extrapolate: 'clamp',
   });
 
-  const pillsOpacity = scrollY.interpolate({
-    inputRange: [0, HERO_HEIGHT * 0.4],
-    outputRange: [1, 0],
-    extrapolate: 'clamp',
-  });
-
   return (
     <View style={styles.container}>
       <Animated.ScrollView
@@ -139,7 +199,7 @@ export default function RestaurantScreen({ navigation, route }: Props) {
           [{ nativeEvent: { contentOffset: { y: scrollY } } }],
           { useNativeDriver: true },
         )}
-        contentContainerStyle={{ paddingBottom: 120 }}
+        contentContainerStyle={{ paddingBottom: 120 + TAB_BAR_OFFSET }}
       >
         {/* Hero */}
         <View style={styles.heroWrapper}>
@@ -164,30 +224,8 @@ export default function RestaurantScreen({ navigation, route }: Props) {
             style={styles.heroGradient}
           />
 
-          {/* Glass pills on hero */}
-          <Animated.View style={[styles.glassPillsRow, { opacity: pillsOpacity }]}>
-            {restaurant?.rating ? (
-              <View style={styles.glassPill}>
-                <Ionicons name="star" size={12} color={colors.warning} />
-                <Text style={styles.glassPillText}>{restaurant.rating.toFixed(1)}</Text>
-              </View>
-            ) : null}
-            {restaurant?.estimatedDeliveryTime ? (
-              <View style={styles.glassPill}>
-                <Ionicons name="time-outline" size={12} color="#fff" />
-                <Text style={styles.glassPillText}>{restaurant.estimatedDeliveryTime} min</Text>
-              </View>
-            ) : null}
-            <View style={styles.glassPill}>
-              <Ionicons name="bicycle-outline" size={12} color="#fff" />
-              <Text style={styles.glassPillText}>
-                {restaurant?.deliveryFee === 0 ? 'Gratuit' : formatPrice(restaurant?.deliveryFee ?? 0)}
-              </Text>
-            </View>
-          </Animated.View>
-
           {/* Back button */}
-          <Pressable style={styles.backButton} onPress={() => navigation.goBack()}>
+          <Pressable style={[styles.backButton, { top: insets.top + 8 }]} onPress={() => navigation.goBack()}>
             <View style={styles.backButtonInner}>
               <Ionicons name="chevron-back" size={22} color="#fff" />
             </View>
@@ -218,49 +256,101 @@ export default function RestaurantScreen({ navigation, route }: Props) {
 
           <View style={styles.cardDivider} />
 
-          <View style={styles.deliveryRow}>
-            <View style={styles.deliveryItem}>
-              <View style={styles.deliveryIconCircle}>
-                <Ionicons name="bicycle" size={18} color={colors.primary} />
-              </View>
-              <Text style={styles.deliveryLabel}>Livraison</Text>
-              <Text style={styles.deliveryValue}>
-                {restaurant?.deliveryFee === 0
-                  ? 'Offerte'
-                  : formatPrice(restaurant?.deliveryFee ?? 0)}
+          <View style={styles.infoRow}>
+            <View style={styles.infoIconCircle}>
+              <Ionicons name="location-outline" size={17} color={colors.primary} />
+            </View>
+            <View style={styles.infoBody}>
+              <Text style={styles.infoLabel}>Adresse</Text>
+              <Text style={styles.infoValue}>
+                {restaurant?.address ?? 'Brazzaville'}
+                {restaurant?.city ? `, ${restaurant.city}` : ''}
               </Text>
             </View>
+          </View>
 
-            <View style={styles.deliveryVerticalDivider} />
+          <View style={styles.infoRow}>
+            <View style={[styles.infoIconCircle, { backgroundColor: colors.secondaryLight }]}>
+              <Ionicons name="call-outline" size={17} color={colors.secondary} />
+            </View>
+            <View style={styles.infoBody}>
+              <Text style={styles.infoLabel}>Téléphone</Text>
+              {restaurant?.phone ? (
+                <PhoneNumber phone={restaurant.phone} tint={colors.secondary} />
+              ) : (
+                <Text style={styles.infoValue}>Non renseigné</Text>
+              )}
+            </View>
+          </View>
 
-            <View style={styles.deliveryItem}>
-              <View style={[styles.deliveryIconCircle, { backgroundColor: colors.secondaryLight }]}>
-                <Ionicons name="time" size={18} color={colors.secondary} />
-              </View>
-              <Text style={styles.deliveryLabel}>Temps estimé</Text>
-              <Text style={styles.deliveryValue}>
-                {restaurant?.estimatedDeliveryTime ?? 30} min
-              </Text>
+          <View style={styles.infoRow}>
+            <View style={[styles.infoIconCircle, { backgroundColor: '#ECFDF5' }]}>
+              <Ionicons name="navigate-outline" size={17} color={colors.success} />
+            </View>
+            <View style={styles.infoBody}>
+              <Text style={styles.infoLabel}>Distance</Text>
+              <Text style={styles.infoValue}>{restaurantDistance} de chez vous</Text>
             </View>
           </View>
         </View>
 
-        {/* Menu sections */}
-        {sections.map((section) => (
-          <View key={section.key} style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>{section.title}</Text>
-              <View style={styles.sectionLine} />
-            </View>
-            {section.data.map((menuItem) => (
-              <MenuItemCard
-                key={menuItem.id}
-                item={menuItem}
-                onAdd={() => handleAdd(menuItem)}
-              />
-            ))}
+        {/* Menu : slider de catégories */}
+        {groups.length > 0 ? (
+          <View style={styles.menuBlock}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.groupChipsRow}
+            >
+              {groups.map((group) => {
+                const active = group.key === activeGroup?.key;
+                return (
+                  <Pressable
+                    key={group.key}
+                    style={[styles.groupChip, active && styles.groupChipActive]}
+                    onPress={() => {
+                      Haptics.selectionAsync();
+                      setActiveGroupKey(group.key);
+                    }}
+                  >
+                    <Text style={styles.groupChipEmoji}>{group.emoji}</Text>
+                    <Text style={[styles.groupChipLabel, active && styles.groupChipLabelActive]}>
+                      {group.label}
+                    </Text>
+                    <View style={[styles.groupChipCount, active && styles.groupChipCountActive]}>
+                      <Text style={[styles.groupChipCountText, active && styles.groupChipCountTextActive]}>
+                        {group.items.length}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {activeGroup ? (
+              <View style={styles.groupItems}>
+                <View style={styles.groupTitleRow}>
+                  <Text style={styles.groupTitle}>
+                    {activeGroup.emoji} {activeGroup.label}
+                  </Text>
+                  <Text style={styles.groupCount}>{activeGroup.items.length} produits</Text>
+                </View>
+                {activeGroup.items.map((menuItem) => (
+                  <MenuItemCard
+                    key={menuItem.id}
+                    item={menuItem}
+                    onAdd={() => handleAdd(menuItem)}
+                    onPress={() => setSelectedItem(menuItem)}
+                  />
+                ))}
+              </View>
+            ) : null}
           </View>
-        ))}
+        ) : (
+          <View style={styles.emptyMenu}>
+            <Text style={styles.emptyMenuText}>Le menu de ce restaurant arrive bientôt.</Text>
+          </View>
+        )}
       </Animated.ScrollView>
 
       {/* Cart bar */}
@@ -290,11 +380,34 @@ export default function RestaurantScreen({ navigation, route }: Props) {
           </LinearGradient>
         </Pressable>
       </Animated.View>
+
+      {/* Fiche produit */}
+      <ProductDetailModal
+        visible={selectedItem != null}
+        onClose={() => setSelectedItem(null)}
+        id={selectedItem?.id ?? ''}
+        imageUrl={selectedItem ? assetUrl(selectedItem.imageUrl) : undefined}
+        name={selectedItem?.name ?? ''}
+        description={selectedItem?.description}
+        price={selectedItem?.price ?? 0}
+        categoryLabel={selectedItem ? CATEGORY_LABELS[selectedItem.category] ?? selectedItem.category : undefined}
+        seller={restaurant?.name}
+        supplements={showSupplements ? selectedSupplements : []}
+        onAddToCart={handleModalAdd}
+      />
     </View>
   );
 }
 
-function MenuItemCard({ item, onAdd }: { item: MenuItemModel; onAdd: () => void }) {
+function MenuItemCard({
+  item,
+  onAdd,
+  onPress,
+}: {
+  item: MenuItemModel;
+  onAdd: () => void;
+  onPress: () => void;
+}) {
   const imageUrl = assetUrl(item.imageUrl);
   const scaleAnim = useRef(new Animated.Value(1)).current;
 
@@ -317,25 +430,27 @@ function MenuItemCard({ item, onAdd }: { item: MenuItemModel; onAdd: () => void 
 
   return (
     <View style={styles.menuCard}>
-      {imageUrl ? (
-        <Image source={{ uri: imageUrl }} style={styles.menuCardImage} />
-      ) : (
-        <View style={[styles.menuCardImage, styles.menuCardImagePlaceholder]}>
-          <Ionicons name="fast-food" size={28} color={colors.primary + '30'} />
-        </View>
-      )}
+      <Pressable style={styles.menuCardMain} onPress={onPress}>
+        {imageUrl ? (
+          <Image source={{ uri: imageUrl }} style={styles.menuCardImage} />
+        ) : (
+          <View style={[styles.menuCardImage, styles.menuCardImagePlaceholder]}>
+            <Ionicons name="fast-food" size={28} color={colors.primary + '30'} />
+          </View>
+        )}
 
-      <View style={styles.menuCardBody}>
-        <Text style={styles.menuCardName} numberOfLines={1}>
-          {item.name}
-        </Text>
-        {item.description ? (
-          <Text style={styles.menuCardDesc} numberOfLines={2}>
-            {item.description}
+        <View style={styles.menuCardBody}>
+          <Text style={styles.menuCardName} numberOfLines={1}>
+            {item.name}
           </Text>
-        ) : null}
-        <Text style={styles.menuCardPrice}>{formatPrice(item.price)}</Text>
-      </View>
+          {item.description ? (
+            <Text style={styles.menuCardDesc} numberOfLines={2}>
+              {item.description}
+            </Text>
+          ) : null}
+          <Text style={styles.menuCardPrice}>{formatPrice(item.price)}</Text>
+        </View>
+      </Pressable>
 
       <Animated.View style={{ transform: [{ scale: scaleAnim }] }}>
         <Pressable onPress={handlePress}>
@@ -380,7 +495,6 @@ const styles = StyleSheet.create({
   },
   backButton: {
     position: 'absolute',
-    top: Platform.OS === 'ios' ? 54 : 36,
     left: spacing.md,
     zIndex: 10,
   },
@@ -391,32 +505,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.35)',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-
-  // Glass pills
-  glassPillsRow: {
-    position: 'absolute',
-    bottom: CARD_OVERLAP + 14,
-    right: spacing.md,
-    flexDirection: 'row',
-    gap: 6,
-  },
-  glassPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
-  },
-  glassPillText: {
-    color: '#fff',
-    fontSize: 11,
-    fontFamily: fonts.bodyBold,
-    fontWeight: '700',
   },
 
   // Floating card
@@ -438,7 +526,7 @@ const styles = StyleSheet.create({
   },
   restaurantName: {
     flex: 1,
-    fontSize: 24,
+    fontSize: 19,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
     color: colors.secondary,
@@ -460,17 +548,17 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   cuisineText: {
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: fonts.bodyBold,
     fontWeight: '700',
     color: colors.primary,
     marginTop: 6,
   },
   descriptionText: {
-    fontSize: 13,
+    fontSize: 12,
     fontFamily: fonts.bodyMedium,
     color: colors.textMuted,
-    lineHeight: 19,
+    lineHeight: 18,
     marginTop: spacing.sm,
   },
   cardDivider: {
@@ -478,42 +566,122 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginVertical: spacing.md,
   },
-  deliveryRow: {
+  infoRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
   },
-  deliveryItem: {
-    flex: 1,
-    alignItems: 'center',
-    gap: 4,
-  },
-  deliveryIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+  infoIconCircle: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 4,
   },
-  deliveryLabel: {
+  infoBody: {
+    flex: 1,
+  },
+  infoLabel: {
     fontSize: 11,
     fontFamily: fonts.bodyMedium,
     color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
   },
-  deliveryValue: {
+  infoValue: {
+    fontSize: 13,
+    fontFamily: fonts.titleSemiBold,
+    color: colors.secondary,
+    marginTop: 2,
+  },
+
+  // Sections
+  menuBlock: {
+    marginTop: spacing.xl,
+  },
+  groupChipsRow: {
+    paddingHorizontal: spacing.md,
+    gap: spacing.sm,
+  },
+  groupChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    ...shadows.sm,
+  },
+  groupChipActive: {
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
+  },
+  groupChipEmoji: {
+    fontSize: 15,
+  },
+  groupChipLabel: {
+    color: colors.secondary,
+    fontFamily: fonts.titleSemiBold,
     fontSize: 14,
+  },
+  groupChipLabelActive: {
+    color: '#fff',
+  },
+  groupChipCount: {
+    minWidth: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 5,
+  },
+  groupChipCountActive: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+  },
+  groupChipCountText: {
+    color: colors.textMuted,
+    fontFamily: fonts.bodyBold,
+    fontSize: 11,
+  },
+  groupChipCountTextActive: {
+    color: '#fff',
+  },
+  groupItems: {
+    paddingHorizontal: spacing.md,
+    marginTop: spacing.lg,
+  },
+  groupTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing.md,
+  },
+  groupTitle: {
+    fontSize: 16,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
     color: colors.secondary,
   },
-  deliveryVerticalDivider: {
-    width: 1,
-    height: 40,
-    backgroundColor: colors.border,
+  groupCount: {
+    fontSize: 11,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
   },
-
-  // Sections
+  emptyMenu: {
+    paddingVertical: spacing.xxl,
+    alignItems: 'center',
+  },
+  emptyMenuText: {
+    color: colors.textMuted,
+    fontFamily: fonts.bodyMedium,
+    fontSize: 14,
+  },
   section: {
     marginTop: spacing.lg,
     paddingHorizontal: spacing.md,
@@ -525,7 +693,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   sectionTitle: {
-    fontSize: 17,
+    fontSize: 15,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
     color: colors.secondary,
@@ -548,6 +716,12 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     ...shadows.sm,
   },
+  menuCardMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+  },
   menuCardImage: {
     width: 80,
     height: 80,
@@ -563,20 +737,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   menuCardName: {
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: fonts.titleSemiBold,
     fontWeight: '600',
     color: colors.text,
   },
   menuCardDesc: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: fonts.bodyMedium,
     color: colors.textMuted,
-    lineHeight: 17,
+    lineHeight: 16,
     marginTop: 3,
   },
   menuCardPrice: {
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
     color: colors.primary,
@@ -596,7 +770,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    bottom: 0,
+    bottom: TAB_BAR_OFFSET,
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.xl,
     zIndex: 99,
@@ -637,7 +811,7 @@ const styles = StyleSheet.create({
   },
   cartBarLabel: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
   },
@@ -648,7 +822,7 @@ const styles = StyleSheet.create({
   },
   cartBarPrice: {
     color: '#fff',
-    fontSize: 16,
+    fontSize: 15,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
   },

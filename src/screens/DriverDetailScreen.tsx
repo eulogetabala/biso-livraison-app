@@ -2,17 +2,21 @@ import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 import type { MockDriver } from '../mocks/data';
 import { getMockDriverById } from '../mocks/service';
 import { Button } from '../components/ui';
+import FloatingBackButton from '../components/FloatingBackButton';
+import { TAB_BAR_OFFSET } from '../components/AppTabBar';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DriverDetail'>;
 
-export default function DriverDetailScreen({ route }: Props) {
+export default function DriverDetailScreen({ route, navigation }: Props) {
   const [driver, setDriver] = useState<MockDriver | null>(null);
+  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     getMockDriverById(route.params.id).then(setDriver);
@@ -24,13 +28,14 @@ export default function DriverDetailScreen({ route }: Props) {
 
   return (
     <View style={styles.container}>
-      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={styles.hero}>
+      <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={[styles.hero, { paddingTop: insets.top + 24 }]}>
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{driver.firstName[0]}{driver.lastName[0]}</Text>
         </View>
         <Text style={styles.name}>{driver.firstName} {driver.lastName}</Text>
-        <Text style={styles.subtitle}>{driver.type} disponible dans {driver.zone}</Text>
       </LinearGradient>
+
+      <FloatingBackButton navigation={navigation} />
 
       <View style={styles.card}>
         <View style={styles.metricsRow}>
@@ -71,12 +76,11 @@ function Metric({ icon, label, value }: { icon: any; label: string; value: strin
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.background, paddingBottom: TAB_BAR_OFFSET },
   hero: {
-    paddingTop: 32,
+    alignItems: 'center',
     paddingBottom: spacing.xl,
     paddingHorizontal: spacing.lg,
-    alignItems: 'center',
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
@@ -90,9 +94,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarText: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 28 },
-  name: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 26, marginTop: spacing.md },
-  subtitle: { color: 'rgba(255,255,255,0.74)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6 },
+  avatarText: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 22 },
+  name: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 20, marginTop: spacing.md, textAlign: 'center' },
   card: {
     margin: spacing.lg,
     marginTop: -spacing.lg,
