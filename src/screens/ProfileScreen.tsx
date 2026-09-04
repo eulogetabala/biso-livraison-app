@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
+  Alert,
   Animated,
-  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,10 +12,10 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../lib/auth';
-import { assetUrl } from '../lib/api';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
 import PhoneNumber from '../components/PhoneNumber';
+import { useDeleteMyAccountMutation } from '../graphql/operations';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -26,15 +26,9 @@ type Props = CompositeScreenProps<
   NativeStackScreenProps<RootStackParamList>
 >;
 
-const ROLE_LABELS: Record<string, string> = {
-  CLIENT: 'Client Biso',
-  PARTNER: 'Partenaire',
-  DRIVER: 'Livreur',
-  ADMIN: 'Administrateur',
-};
-
 export default function ProfileScreen({ navigation }: Props) {
   const { user, logout } = useAuth();
+  const [deleteMyAccount] = useDeleteMyAccountMutation();
 
   const slideY = useRef(new Animated.Value(-40)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
@@ -60,9 +54,30 @@ export default function ProfileScreen({ navigation }: Props) {
     navigation.replace('Login');
   };
 
-  if (!user) return null;
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      'Supprimer mon compte',
+      'Votre compte, vos commandes et toutes vos données seront définitivement supprimés. Cette action est irréversible.',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Supprimer',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteMyAccount();
+              await logout();
+              navigation.replace('Login');
+            } catch {
+              Alert.alert('Erreur', 'Impossible de supprimer le compte pour le moment.');
+            }
+          },
+        },
+      ],
+    );
+  };
 
-  const initials = `${user.firstName?.[0] ?? ''}${user.lastName?.[0] ?? ''}`.toUpperCase() || '?';
+  if (!user) return null;
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
@@ -80,31 +95,9 @@ export default function ProfileScreen({ navigation }: Props) {
           <View style={[styles.decoCircle, styles.decoCircle3]} />
 
           <View style={styles.headerContent}>
-            {/* Avatar with gradient border ring */}
-            <LinearGradient
-              colors={[colors.primary, colors.primaryDark]}
-              style={styles.avatarRing}
-            >
-              {user.avatarUrl ? (
-                <Image source={{ uri: assetUrl(user.avatarUrl) }} style={styles.avatar as any} />
-              ) : (
-                <LinearGradient
-                  colors={[colors.primary, colors.primaryDark]}
-                  style={styles.avatarFallback}
-                >
-                  <Text style={styles.avatarInitials}>{initials}</Text>
-                </LinearGradient>
-              )}
-            </LinearGradient>
-
             <Text style={styles.userName}>
               {user.firstName} {user.lastName}
             </Text>
-
-            <View style={styles.rolePill}>
-              <Ionicons name="shield-checkmark" size={11} color={colors.primary} />
-              <Text style={styles.roleText}>{ROLE_LABELS[user.role] ?? user.role}</Text>
-            </View>
           </View>
         </LinearGradient>
       </Animated.View>
@@ -145,12 +138,38 @@ export default function ProfileScreen({ navigation }: Props) {
           </View>
           <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
         </Pressable>
+
+        <View style={styles.menuDivider} />
+
+        <Pressable style={styles.menuRow} onPress={() => navigation.navigate('EditProfile')}>
+          <View style={[styles.menuIconWrap, { backgroundColor: colors.primaryLight }]}>
+            <Ionicons name="create-outline" size={19} color={colors.primary} />
+          </View>
+          <Text style={styles.menuLabel}>Modifier mes informations</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </Pressable>
+
+        <View style={styles.menuDivider} />
+
+        <Pressable style={styles.menuRow} onPress={() => navigation.navigate('ForgotPassword')}>
+          <View style={[styles.menuIconWrap, { backgroundColor: '#E0F2FE' }]}>
+            <Ionicons name="key-outline" size={19} color="#0284C7" />
+          </View>
+          <Text style={styles.menuLabel}>Mot de passe oublié</Text>
+          <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </Pressable>
       </Animated.View>
 
       {/* Logout */}
       <TouchableOpacity style={styles.logoutBtn} onPress={handleLogout} activeOpacity={0.8}>
         <Ionicons name="log-out-outline" size={20} color={colors.danger} />
         <Text style={styles.logoutText}>Se déconnecter</Text>
+      </TouchableOpacity>
+
+      {/* Supprimer le compte (minimaliste) */}
+      <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteAccount} activeOpacity={0.6}>
+        <Ionicons name="trash-outline" size={15} color={colors.danger} />
+        <Text style={styles.deleteText}>Supprimer mon compte</Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -194,54 +213,10 @@ const styles = StyleSheet.create({
   decoCircle2: { width: 120, height: 120, bottom: -20, left: -20 },
   decoCircle3: { width: 80, height: 80, top: 30, left: 60 },
 
-  avatarRing: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    borderWidth: 3,
-    borderColor: colors.surface,
-  },
-  avatarFallback: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 3,
-    borderColor: colors.surface,
-  },
-  avatarInitials: {
-    fontSize: 22,
-    color: '#FFFFFF',
-    fontFamily: fonts.titleBold,
-  },
   userName: {
     fontSize: 18,
     color: '#FFFFFF',
     fontFamily: fonts.titleBold,
-    marginBottom: spacing.xs,
-  },
-  rolePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    gap: 4,
-  },
-  roleText: {
-    fontSize: 11,
-    color: colors.primary,
-    fontFamily: fonts.bodyBold,
   },
 
   // Info
@@ -323,6 +298,11 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontFamily: fonts.bodyBold,
   },
+  menuDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+    marginLeft: 50,
+  },
 
   // Logout
   logoutBtn: {
@@ -342,5 +322,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.danger,
     fontFamily: fonts.bodyBold,
+  },
+
+  // Supprimer le compte (minimaliste)
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+    opacity: 0.7,
+  },
+  deleteText: {
+    fontSize: 12,
+    color: colors.danger,
+    fontFamily: fonts.bodyMedium,
+    textDecorationLine: 'underline',
   },
 });

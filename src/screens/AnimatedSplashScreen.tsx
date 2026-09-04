@@ -7,6 +7,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import * as SplashScreen from 'expo-splash-screen';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { colors, fonts } from '../theme';
 import { useAuth } from '../lib/auth';
@@ -31,6 +32,8 @@ export default function AnimatedSplashScreen({ navigation }: Props) {
   const glowOpacity = useRef(new Animated.Value(0.3)).current;
 
   useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
+
     // Run entrance animations in parallel
     Animated.parallel([
       Animated.spring(logoScale, {

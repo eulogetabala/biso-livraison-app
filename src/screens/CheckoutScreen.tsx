@@ -1,13 +1,13 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Animated,
   Image,
   KeyboardAvoidingView,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -15,19 +15,22 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useCreateOrderMutation } from '../graphql/operations';
+import { useCreateOrderMutation, useRestaurantQuery } from '../graphql/operations';
 import type { PaymentMethod } from '../graphql/types';
 import { assetUrl } from '../lib/api';
 import { useCart, lineUnitPrice } from '../lib/cart';
-import { MOCK_MODE } from '../config/mock';
-import { createMockOrder } from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { EmptyState, formatPrice } from '../components/ui';
 import FloatingBackButton from '../components/FloatingBackButton';
+import AddressPickerModal from '../components/AddressPickerModal';
+import PhoneInput from '../components/PhoneInput';
+import { AppTextInput } from '../components/AppTextInput';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Checkout'>;
+
+type CheckoutStep = 'address' | 'payment';
 
 const STEPS = [
   { label: 'Panier', icon: 'cart' as const },
@@ -205,35 +208,41 @@ function AnimatedPrice({ value }: { value: number }) {
 
 export default function CheckoutScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
-  const { cart, subtotal, total, clear } = useCart();
+  const { cart, subtotal, clear } = useCart();
+  const [step, setStep] = useState<CheckoutStep>('address');
   const [address, setAddress] = useState('');
-  const [city, setCity] = useState('');
-  const [zipCode, setZipCode] = useState('');
-  const [notes, setNotes] = useState('');
+  const [phone, setPhone] = useState('');
+  const [note, setNote] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [deliveryCoords, setDeliveryCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [createOrder, { loading }] = useCreateOrderMutation();
+  const { data: restaurantData } = useRestaurantQuery({
+    variables: { id: cart.restaurantId ?? '' },
+    skip: !cart.restaurantId,
+  });
 
-  const addressFocus = useRef(new Animated.Value(0)).current;
-  const zipFocus = useRef(new Animated.Value(0)).current;
-  const cityFocus = useRef(new Animated.Value(0)).current;
-  const notesFocus = useRef(new Animated.Value(0)).current;
+  const deliveryFee = restaurantData?.restaurant?.deliveryFee ?? 0;
 
-  const animateInput = (anim: Animated.Value, toValue: number) => {
-    Animated.timing(anim, {
-      toValue,
-      duration: 200,
-      useNativeDriver: false,
-    }).start();
+  const total = subtotal + deliveryFee;
+
+  const activeStep = step === 'payment' ? 2 : 1;
+
+  const digitsOnly = (v: string) => v.replace(/\D/g, '');
+
+  const goToPayment = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setError(null);
+    if (!address.trim()) {
+      setError('Veuillez choisir ou saisir une adresse de livraison.');
+      return;
+    }
+    if (digitsOnly(phone).length < 9) {
+      setError('Veuillez renseigner un numéro de téléphone valide.');
+      return;
+    }
+    setStep('payment');
   };
-
-  const makeBorderInterpolate = (anim: Animated.Value) =>
-    anim.interpolate({
-      inputRange: [0, 1],
-      outputRange: [colors.border, colors.primary],
-    });
-
-  const activeStep =
-    address.trim() && city.trim() && zipCode.trim() ? 2 : 0;
 
   const handleSubmit = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -242,39 +251,28 @@ export default function CheckoutScreen({ navigation }: Props) {
       setError('Votre panier est vide.');
       return;
     }
-    if (!address.trim() || !city.trim() || !zipCode.trim()) {
-      setError('Veuillez renseigner l\u2019adresse de livraison complète.');
+    if (!address.trim()) {
+      setError('Veuillez renseigner l\u2019adresse de livraison.');
       return;
     }
     try {
-      if (MOCK_MODE) {
-        const createdOrder = await createMockOrder({
-          restaurantId: cart.restaurantId,
-          items: cart.lines.map((l) => ({ menuItemId: l.menuItem.id, quantity: l.quantity })),
-          deliveryAddress: address.trim(),
-          deliveryCity: city.trim(),
-          deliveryZipCode: zipCode.trim(),
-          paymentMethod: 'CASH_ON_DELIVERY' as PaymentMethod,
-        });
-        clear();
-        navigation.navigate('OrderDetail', { id: createdOrder.id });
-        return;
-      }
       const { data } = await createOrder({
         variables: {
           input: {
             restaurantId: cart.restaurantId,
             items: cart.lines.map((l) => ({ menuItemId: l.menuItem.id, quantity: l.quantity })),
             deliveryAddress: address.trim(),
-            deliveryCity: city.trim(),
-            deliveryZipCode: zipCode.trim(),
+            deliveryCity: 'Brazzaville',
+            deliveryZipCode: '0000',
+            deliveryLatitude: deliveryCoords?.latitude,
+            deliveryLongitude: deliveryCoords?.longitude,
             paymentMethod: 'CASH_ON_DELIVERY' as PaymentMethod,
           },
         },
       });
       if (!data?.createOrder) throw new Error('Réponse invalide du serveur.');
       clear();
-      navigation.navigate('OrderDetail', { id: data.createOrder.id });
+      navigation.navigate('OrderDetail', { id: data.createOrder.id, confirmation: true });
     } catch (e) {
       const message =
         e instanceof Error && e.message.toLowerCase().includes('restaurant')
@@ -304,7 +302,7 @@ export default function CheckoutScreen({ navigation }: Props) {
         showsVerticalScrollIndicator={false}
       >
         {/* Title */}
-        <Text style={s.pageTitle}>Panier</Text>
+        <Text style={s.pageTitle}>{step === 'payment' ? 'Paiement' : 'Adresse de livraison'}</Text>
 
         {/* Stepper */}
         <Stepper activeStep={activeStep} />
@@ -317,7 +315,7 @@ export default function CheckoutScreen({ navigation }: Props) {
           <Text style={s.restaurantName}>{cart.restaurantName}</Text>
         </View>
 
-        {/* Items Card */}
+        {/* Items Card (compact recap) */}
         <View style={[s.card, shadows.md]}>
           <View style={s.cardHeader}>
             <Ionicons name="receipt" size={18} color={colors.primary} />
@@ -360,133 +358,138 @@ export default function CheckoutScreen({ navigation }: Props) {
             </View>
           ))}
 
-          {/* Price Summary */}
           <View style={s.summary}>
             <View style={s.summaryRow}>
               <Text style={s.summaryLabel}>Sous-total</Text>
               <Text style={s.summaryValue}>{formatPrice(subtotal)}</Text>
             </View>
-            <View style={s.summaryRow}>
-              <Text style={s.summaryLabel}>Frais de livraison</Text>
-              {cart.deliveryFee === 0 ? (
-                <View style={s.freeBadge}>
-                  <Text style={s.freeText}>Gratuit</Text>
+            {step === 'payment' ? (
+              <>
+                <View style={s.summaryRow}>
+                  <Text style={s.summaryLabel}>Frais de livraison</Text>
+                  <Text style={s.summaryValue}>{formatPrice(deliveryFee)}</Text>
                 </View>
-              ) : (
-                <Text style={s.summaryValue}>{formatPrice(cart.deliveryFee)}</Text>
-              )}
-            </View>
-            <View style={s.summaryDivider} />
-            <View style={s.summaryRow}>
-              <Text style={s.summaryTotalLabel}>Total</Text>
-              <AnimatedPrice value={total} />
-            </View>
+                <View style={s.summaryDivider} />
+                <View style={s.summaryRow}>
+                  <Text style={s.summaryTotalLabel}>Total</Text>
+                  <AnimatedPrice value={total} />
+                </View>
+              </>
+            ) : null}
           </View>
         </View>
 
         {/* Address Card */}
-        <View style={[s.card, shadows.md]}>
-          <View style={s.cardHeader}>
-            <Ionicons name="location" size={18} color={colors.primary} />
-            <Text style={s.cardTitle}>Adresse de livraison</Text>
-          </View>
-
-          <View style={s.inputGroup}>
-            <View style={s.inputLabel}>
-              <Ionicons name="home-outline" size={14} color={colors.textMuted} />
-              <Text style={s.label}>Adresse</Text>
+        {step === 'address' ? (
+          <View style={[s.card, shadows.md]}>
+            <View style={s.cardHeader}>
+              <Ionicons name="location" size={18} color={colors.primary} />
+              <Text style={s.cardTitle}>Adresse de livraison</Text>
             </View>
-            <Animated.View style={[s.inputWrapper, { borderColor: makeBorderInterpolate(addressFocus) }]}>
-              <Ionicons name="navigate-outline" size={16} color={colors.textMuted} style={s.inputIcon} />
-              <TextInput
-                style={s.input}
-                value={address}
-                onChangeText={setAddress}
-                placeholder="12 rue des Lilas"
-                placeholderTextColor={colors.textMuted}
-                onFocus={() => animateInput(addressFocus, 1)}
-                onBlur={() => animateInput(addressFocus, 0)}
-              />
-            </Animated.View>
-          </View>
 
-          <View style={s.row}>
-            <View style={s.rowItem}>
-              <View style={s.inputLabel}>
-                <Ionicons name="mail-outline" size={14} color={colors.textMuted} />
-                <Text style={s.label}>Code postal</Text>
+            <Pressable
+              style={s.addressRow}
+              onPress={() => {
+                setPickerOpen(true);
+                setError(null);
+              }}
+            >
+              <View style={[s.addressRowIcon, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="map-outline" size={18} color={colors.primary} />
               </View>
-              <Animated.View style={[s.inputWrapper, { borderColor: makeBorderInterpolate(zipFocus) }]}>
-                <Ionicons name="keypad-outline" size={16} color={colors.textMuted} style={s.inputIcon} />
-                <TextInput
-                  style={s.input}
-                  value={zipCode}
-                  onChangeText={setZipCode}
-                  placeholder="75011"
-                  placeholderTextColor={colors.textMuted}
-                  keyboardType="number-pad"
-                  onFocus={() => animateInput(zipFocus, 1)}
-                  onBlur={() => animateInput(zipFocus, 0)}
-                />
-              </Animated.View>
-            </View>
-            <View style={[s.rowItem, s.rowItemWide]}>
-              <View style={s.inputLabel}>
-                <Ionicons name="business-outline" size={14} color={colors.textMuted} />
-                <Text style={s.label}>Ville</Text>
+              <View style={s.addressRowBody}>
+                <Text style={s.addressRowLabel}>Adresse de livraison</Text>
+                <Text style={s.addressRowValue}>
+                  {address || 'Trouver sur la carte ou saisir manuellement'}
+                </Text>
               </View>
-              <Animated.View style={[s.inputWrapper, { borderColor: makeBorderInterpolate(cityFocus) }]}>
-                <Ionicons name="location-outline" size={16} color={colors.textMuted} style={s.inputIcon} />
-                <TextInput
-                  style={s.input}
-                  value={city}
-                  onChangeText={setCity}
-                  placeholder="Paris"
-                  placeholderTextColor={colors.textMuted}
-                  onFocus={() => animateInput(cityFocus, 1)}
-                  onBlur={() => animateInput(cityFocus, 0)}
-                />
-              </Animated.View>
-            </View>
-          </View>
+              <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+            </Pressable>
 
-          <View style={s.inputGroup}>
-            <View style={s.inputLabel}>
-              <Ionicons name="chatbubble-outline" size={14} color={colors.textMuted} />
-              <Text style={s.label}>Notes facultatives</Text>
+            {/* Numéro de téléphone pour la livraison */}
+            <View style={s.phoneGroup}>
+              <View style={s.inputLabel}>
+                <Ionicons name="call-outline" size={14} color={colors.textMuted} />
+                <Text style={s.label}>Numéro de téléphone</Text>
+              </View>
+              <View style={s.phoneWrapper}>
+                <PhoneInput
+                  value={phone}
+                  onChange={setPhone}
+                  placeholder="06 XXX XX XX"
+                />
+              </View>
             </View>
-            <Animated.View style={[s.inputWrapper, { borderColor: makeBorderInterpolate(notesFocus) }]}>
-              <Ionicons name="document-text-outline" size={16} color={colors.textMuted} style={[s.inputIcon, { marginTop: 12 }]} />
-              <TextInput
-                style={[s.input, s.inputMultiline]}
-                value={notes}
-                onChangeText={setNotes}
-                placeholder="Code d'accès, étage, instructions…"
-                placeholderTextColor={colors.textMuted}
+
+            {/* Note pour le restaurant */}
+            <View style={s.phoneGroup}>
+              <View style={s.inputLabel}>
+                <Ionicons name="chatbubble-ellipses-outline" size={14} color={colors.textMuted} />
+                <Text style={s.label}>Note pour le restaurant (optionnel)</Text>
+              </View>
+              <AppTextInput
+                style={s.noteInput}
+                value={note}
+                onChangeText={setNote}
+                placeholder="Ex : sans piment, couverts en plus…"
                 multiline
-                onFocus={() => animateInput(notesFocus, 1)}
-                onBlur={() => animateInput(notesFocus, 0)}
+                maxLength={160}
+                numberOfLines={3}
               />
-            </Animated.View>
+            </View>
           </View>
-        </View>
+        ) : (
+          /* Payment Card */
+          <View style={[s.card, shadows.md]}>
+            <View style={s.cardHeader}>
+              <Ionicons name="location" size={18} color={colors.primary} />
+              <Text style={s.cardTitle}>Adresse de livraison</Text>
+            </View>
+            <View style={s.confirmRow}>
+              <View style={[s.confirmRowIcon, { backgroundColor: colors.primaryLight }]}>
+                <Ionicons name="home-outline" size={18} color={colors.primary} />
+              </View>
+              <Text style={s.confirmAddressText}>{address}</Text>
+            </View>
+            <View style={[s.confirmRow, s.confirmRowPhone]}>
+              <View style={[s.confirmRowIcon, { backgroundColor: colors.secondaryLight }]}>
+                <Ionicons name="call-outline" size={18} color={colors.secondary} />
+              </View>
+              <Text style={s.confirmAddressText}>+242 {phone}</Text>
+            </View>
+            {note.trim() ? (
+              <View style={[s.confirmRow, s.confirmRowPhone, { marginTop: spacing.sm }]}>
+                <View style={[s.confirmRowIcon, { backgroundColor: colors.primaryLight }]}>
+                  <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.primary} />
+                </View>
+                <Text style={s.confirmAddressText}>{note.trim()}</Text>
+              </View>
+            ) : null}
+            <Pressable style={s.editBtn} onPress={() => setStep('address')}>
+              <Ionicons name="pencil" size={15} color={colors.primary} />
+              <Text style={s.editText}>Modifier l'adresse</Text>
+            </Pressable>
+          </View>
+        )}
 
-        {/* Payment Card */}
-        <View style={[s.card, shadows.md]}>
-          <View style={s.cardHeader}>
-            <Ionicons name="wallet" size={18} color={colors.primary} />
-            <Text style={s.cardTitle}>Mode de paiement</Text>
-          </View>
-          <View style={s.paymentRow}>
-            <View style={s.paymentIconWrap}>
-              <Ionicons name="cash" size={20} color={colors.success} />
+        {/* Payment Method */}
+        {step === 'payment' ? (
+          <View style={[s.card, shadows.md]}>
+            <View style={s.cardHeader}>
+              <Ionicons name="wallet" size={18} color={colors.primary} />
+              <Text style={s.cardTitle}>Mode de paiement</Text>
             </View>
-            <View>
-              <Text style={s.paymentTitle}>Espèces à la livraison</Text>
-              <Text style={s.paymentSub}>Payez directement au livreur</Text>
+            <View style={s.paymentRow}>
+              <View style={s.paymentIconWrap}>
+                <Ionicons name="cash" size={20} color={colors.success} />
+              </View>
+              <View>
+                <Text style={s.paymentTitle}>Espèces à la livraison</Text>
+                <Text style={s.paymentSub}>Payez directement au livreur</Text>
+              </View>
             </View>
           </View>
-        </View>
+        ) : null}
 
         {/* Error */}
         {error ? (
@@ -499,14 +502,37 @@ export default function CheckoutScreen({ navigation }: Props) {
         ) : null}
 
         {/* Submit */}
-        <ShimmerButton
-          title={`Valider la commande · ${formatPrice(total)}`}
-          onPress={handleSubmit}
-          loading={loading}
-        />
+        {step === 'address' ? (
+          <ShimmerButton
+            title="Continuer vers le paiement"
+            onPress={goToPayment}
+            loading={false}
+          />
+        ) : (
+          <ShimmerButton
+            title={`Valider la commande · ${formatPrice(total)}`}
+            onPress={handleSubmit}
+            loading={loading}
+          />
+        )}
 
         <View style={{ height: spacing.xl }} />
       </ScrollView>
+
+      {/* Sélecteur d'adresse sur la carte */}
+      <AddressPickerModal
+        visible={pickerOpen}
+        target="delivery"
+        initialAddress={address}
+        defaultCity="brazzaville"
+        onClose={() => setPickerOpen(false)}
+        onConfirm={(addr, coords) => {
+          setAddress(addr);
+          setDeliveryCoords(coords ?? null);
+          setPickerOpen(false);
+          setError(null);
+        }}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -708,18 +734,6 @@ const s = StyleSheet.create({
     fontWeight: '600',
     fontFamily: fonts.bodyBold,
   },
-  freeBadge: {
-    backgroundColor: '#ECFDF5',
-    borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 2,
-  },
-  freeText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: colors.success,
-    fontFamily: fonts.bodyBold,
-  },
   summaryDivider: {
     height: 1,
     backgroundColor: colors.border,
@@ -739,7 +753,6 @@ const s = StyleSheet.create({
   },
 
   // Inputs
-  inputGroup: { marginTop: spacing.sm },
   inputLabel: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -752,27 +765,99 @@ const s = StyleSheet.create({
     color: colors.secondary,
     fontFamily: fonts.titleSemiBold,
   },
-  inputWrapper: {
+  phoneGroup: {
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  phoneWrapper: {
     borderWidth: 1.5,
     borderRadius: radius.sm,
     backgroundColor: colors.background,
-    flexDirection: 'row',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  inputIcon: { marginLeft: spacing.sm },
-  input: {
-    flex: 1,
+    paddingVertical: 6,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 11,
-    fontSize: 15,
+    height: 52,
+    justifyContent: 'center',
+  },
+  noteInput: {
+    minHeight: 76,
+    borderWidth: 1.5,
+    borderColor: colors.border,
+    borderRadius: radius.sm,
+    backgroundColor: colors.background,
+    padding: spacing.sm,
+    fontSize: 14,
     color: colors.text,
     fontFamily: fonts.bodyMedium,
+    textAlignVertical: 'top',
   },
-  inputMultiline: { minHeight: 70, textAlignVertical: 'top' },
-  row: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  rowItem: { flex: 1 },
-  rowItemWide: { flex: 2 },
+
+  // Adresse picker / saisie
+  addressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.border,
+  },
+  addressRowIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  addressRowBody: { flex: 1 },
+  addressRowLabel: {
+    fontSize: 14,
+    fontFamily: fonts.bodyBold,
+    color: colors.secondary,
+  },
+  addressRowValue: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: 1,
+  },
+  confirmRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: radius.sm,
+    padding: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  confirmRowPhone: {
+    marginBottom: 0,
+  },
+  confirmRowIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmAddressText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: fonts.bodyMedium,
+    color: colors.text,
+    lineHeight: 20,
+  },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  editText: {
+    fontSize: 13,
+    fontFamily: fonts.bodyBold,
+    color: colors.primary,
+  },
 
   // Payment
   paymentRow: {

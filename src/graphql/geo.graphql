@@ -1,0 +1,9 @@
+query TrackDelivery($orderId: ID!) {
+  trackDelivery(orderId: $orderId) {
+    id
+    driverId
+    latitude
+    longitude
+    updatedAt
+  }
+}

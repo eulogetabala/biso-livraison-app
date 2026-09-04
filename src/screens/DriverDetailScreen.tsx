@@ -1,38 +1,65 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import type { MockDriver } from '../mocks/data';
-import { getMockDriverById } from '../mocks/service';
-import { Button } from '../components/ui';
+import { useDriverQuery } from '../graphql/operations';
+import { driverToDisplay } from '../lib/drivers-display';
+import { Button, EmptyState, Spinner } from '../components/ui';
 import FloatingBackButton from '../components/FloatingBackButton';
 import { TAB_BAR_OFFSET } from '../components/AppTabBar';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'DriverDetail'>;
 
+const ZONE_BY_TYPE: Record<string, string> = {
+  Express: 'Centre-ville',
+  Moto: 'Talangaï',
+  Interville: 'Brazzaville → Pointe-Noire',
+};
+
 export default function DriverDetailScreen({ route, navigation }: Props) {
-  const [driver, setDriver] = useState<MockDriver | null>(null);
   const insets = useSafeAreaInsets();
+  const { data, loading, error } = useDriverQuery({
+    variables: { id: route.params.id },
+  });
 
-  useEffect(() => {
-    getMockDriverById(route.params.id).then(setDriver);
-  }, [route.params.id]);
-
-  if (!driver) {
-    return <View style={styles.container} />;
+  if (loading && !data) {
+    return (
+      <View style={styles.container}>
+        <Spinner />
+      </View>
+    );
   }
+
+  if (error || !data?.driver) {
+    return (
+      <View style={styles.container}>
+        <EmptyState title="Livreur introuvable" subtitle="Ce livreur n'est plus disponible." />
+      </View>
+    );
+  }
+
+  const driver = driverToDisplay(data.driver);
+  const zone = ZONE_BY_TYPE[driver.type] ?? driver.zone;
 
   return (
     <View style={styles.container}>
       <LinearGradient colors={[colors.secondary, colors.secondaryDark]} style={[styles.hero, { paddingTop: insets.top + 24 }]}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{driver.firstName[0]}{driver.lastName[0]}</Text>
+        <View style={styles.heroIconWrap}>
+          <Ionicons
+            name={driver.type === 'Moto' ? 'bicycle' : driver.type === 'Interville' ? 'swap-horizontal' : 'speedometer'}
+            size={30}
+            color="#fff"
+          />
         </View>
         <Text style={styles.name}>{driver.firstName} {driver.lastName}</Text>
+        <View style={styles.statusPill}>
+          <View style={styles.statusDot} />
+          <Text style={styles.statusPillText}>Disponible maintenant</Text>
+        </View>
       </LinearGradient>
 
       <FloatingBackButton navigation={navigation} />
@@ -41,21 +68,23 @@ export default function DriverDetailScreen({ route, navigation }: Props) {
         <View style={styles.metricsRow}>
           <Metric icon="time-outline" label="Arrivée" value={`${driver.etaMinutes} min`} />
           <Metric icon="star" label="Note" value={driver.rating.toFixed(1)} />
-          <Metric icon="shield-checkmark-outline" label="Statut" value="Vérifié" />
+          <Metric icon="bicycle-outline" label="Type" value={driver.type} />
         </View>
 
         <View style={styles.infoPanel}>
           <View style={styles.infoRow}>
+            <View style={styles.infoDot} />
+            <Text style={styles.infoText}>Disponible maintenant pour prendre votre course.</Text>
+          </View>
+          <View style={styles.infoRow}>
             <MaterialCommunityIcons name="motorbike" size={18} color={colors.primary} />
-            <Text style={styles.infoText}>Idéal pour courses express, repas et petits colis.</Text>
+            <Text style={styles.infoText}>
+              Livreur {driver.type === 'Interville' ? 'interville' : driver.type === 'Moto' ? 'en moto' : 'express'}.
+            </Text>
           </View>
           <View style={styles.infoRow}>
             <Ionicons name="location-outline" size={18} color={colors.primary} />
-            <Text style={styles.infoText}>Zone couverte : {driver.zone}</Text>
-          </View>
-          <View style={styles.infoRow}>
-            <Ionicons name="flash-outline" size={18} color={colors.primary} />
-            <Text style={styles.infoText}>Réponse rapide et disponibilité immédiate en mode mock.</Text>
+            <Text style={styles.infoText}>Zone couverte : {zone}</Text>
           </View>
         </View>
 
@@ -69,8 +98,8 @@ function Metric({ icon, label, value }: { icon: any; label: string; value: strin
   return (
     <View style={styles.metric}>
       <Ionicons name={icon} size={18} color={colors.primary} />
-      <Text style={styles.metricValue}>{value}</Text>
       <Text style={styles.metricLabel}>{label}</Text>
+      <Text style={styles.metricValue}>{value}</Text>
     </View>
   );
 }
@@ -79,48 +108,60 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background, paddingBottom: TAB_BAR_OFFSET },
   hero: {
     alignItems: 'center',
+    paddingHorizontal: spacing.xl,
     paddingBottom: spacing.xl,
-    paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
-  avatar: {
-    width: 86,
-    height: 86,
-    borderRadius: 43,
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.2)',
+  heroIconWrap: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: 'rgba(255,255,255,0.12)',
     alignItems: 'center',
     justifyContent: 'center',
+    marginBottom: spacing.md,
   },
-  avatarText: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 22 },
-  name: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 20, marginTop: spacing.md, textAlign: 'center' },
+  name: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 24 },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: spacing.md,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+  },
+  statusDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
+  statusPillText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 13 },
   card: {
     margin: spacing.lg,
-    marginTop: -spacing.lg,
+    marginTop: -28,
     backgroundColor: colors.surface,
     borderRadius: radius.xl,
     padding: spacing.lg,
     ...shadows.lg,
   },
-  metricsRow: { flexDirection: 'row', gap: spacing.sm },
+  metricsRow: { flexDirection: 'row', justifyContent: 'space-between', gap: spacing.sm },
   metric: {
     flex: 1,
-    backgroundColor: colors.background,
-    borderRadius: radius.md,
-    paddingVertical: spacing.md,
     alignItems: 'center',
-  },
-  metricValue: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 16, marginTop: 8 },
-  metricLabel: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 11, marginTop: 4 },
-  infoPanel: {
-    marginTop: spacing.lg,
-    gap: spacing.md,
     backgroundColor: colors.primaryLight,
     borderRadius: radius.lg,
-    padding: spacing.lg,
+    paddingVertical: spacing.md,
+    gap: 4,
   },
-  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
-  infoText: { flex: 1, color: colors.secondary, fontFamily: fonts.bodyMedium, fontSize: 13, lineHeight: 19 },
+  metricLabel: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12 },
+  metricValue: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 15 },
+  infoPanel: {
+    marginTop: spacing.lg,
+    backgroundColor: colors.background,
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  infoDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.success },
+  infoText: { flex: 1, color: colors.text, fontFamily: fonts.bodyMedium, fontSize: 14 },
 });

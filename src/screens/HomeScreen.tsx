@@ -9,26 +9,39 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useSearchRestaurantsQuery } from '../graphql/operations';
-import type { RestaurantModel } from '../graphql/types';
+import {
+  useActiveCuisineTypesQuery,
+  useActiveHomeBannersQuery,
+  useActiveMarketCategoriesQuery,
+  useAvailableDriversQuery,
+  useSearchMenuItemsQuery,
+  useSearchRestaurantsQuery,
+} from '../graphql/operations';
+import type { MenuItemModel } from '../graphql/types';
 import { assetUrl } from '../lib/api';
 import { useCart } from '../lib/cart';
 import { useAuth } from '../lib/auth';
-import { computeDeliveryFee } from '../lib/pricing';
-import { MOCK_MODE } from '../config/mock';
-import type { MockDriver, MockProduct } from '../mocks/data';
-import { getMockDrivers, getMockProducts, getMockRestaurants } from '../mocks/service';
+import { useNotifications } from '../lib/notifications';
+import { restaurantDistanceKm } from '../lib/geo-data';
+import { useUserLocation } from '../lib/user-location';
+import { requestLocationPermission, promptLocationDenied } from '../lib/permissions';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { EmptyState, formatPrice, SkeletonBlock } from '../components/ui';
+import { AppTextInput } from '../components/AppTextInput';
+import OpenClosedBadge from '../components/OpenClosedBadge';
 import ProductDetailModal from '../components/ProductDetailModal';
-import { MARKET_RESTAURANT_ID, MARKET_RESTAURANT_NAME, menuItemFromProduct } from '../lib/cart-helpers';
+import RestaurantCoverImage from '../components/RestaurantCoverImage';
+import { menuItemToCatalogProduct, type CatalogProduct } from '../lib/catalog';
+import { countProductsByCategory, mapApiMarketCategories } from '../lib/market-categories';
+import { useMarketRestaurant } from '../lib/use-market';
+import { formatCuisineDisplay } from '../lib/cuisine-display';
+import { navigateFromBanner } from '../lib/banner-navigation';
 import type { BottomTabScreenProps } from '@react-navigation/bottom-tabs';
 import type { CompositeScreenProps } from '@react-navigation/native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
@@ -43,50 +56,15 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const HERO_CARD_WIDTH = SCREEN_WIDTH - spacing.lg * 2;
 const HERO_SNAP = HERO_CARD_WIDTH + spacing.md;
 
-const CUISINES: { label: string; value?: string | 'ALL'; emoji: string }[] = [
-  { label: 'Tous', value: 'ALL', emoji: '🍽️' },
-  { label: 'Africain', value: 'AFRICAIN', emoji: '🥘' },
-  { label: 'Pizza', value: 'PIZZA', emoji: '🍕' },
-  { label: 'Burgers', value: 'BURGER', emoji: '🍔' },
-  { label: 'Salades', value: 'SALADE', emoji: '🥗' },
-  { label: 'Desserts', value: 'DESSERT', emoji: '🧁' },
-];
-
-const HOME_CATEGORIES = [
-  { key: 'boissons', label: 'Boissons', icon: 'wine-outline', lib: 'ionicons', tint: '#E0F2FE', iconColor: '#0284C7' },
-  { key: 'boucherie', label: 'Boucherie', icon: 'food-steak', lib: 'mci', tint: '#FEE2E2', iconColor: '#DC2626' },
-  { key: 'volailles', label: 'Volailles', icon: 'food-drumstick-outline', lib: 'mci', tint: '#FEF3C7', iconColor: '#D97706' },
-  { key: 'fruits', label: 'Fruits', icon: 'nutrition-outline', lib: 'ionicons', tint: '#ECFCCB', iconColor: '#65A30D' },
-  { key: 'legumes', label: 'Légumes', icon: 'carrot', lib: 'mci', tint: '#DCFCE7', iconColor: '#16A34A' },
-  { key: 'epicerie', label: 'Epicerie', icon: 'shopping-bag', lib: 'feather', tint: '#EDE9FE', iconColor: '#7C3AED' },
-] as const;
-
-const HERO_SLIDES = [
-  {
-    id: 'hero-1',
-    badge: 'Gourmand',
-    title: 'Les meilleurs restos de Brazzaville, livrés chaud',
-    subtitle: 'Cuisine locale, burgers premium, pizzas et jus frais en quelques minutes.',
-    image: 'https://images.unsplash.com/photo-1504674900247-0877df9cc836?q=80&w=1200&auto=format&fit=crop',
-    cta: 'Commander un repas',
-  },
-  {
-    id: 'hero-2',
-    badge: 'Marché local',
-    title: 'Pains, gâteaux et produits maison juste autour de toi',
-    subtitle: 'Des produits du quotidien et des douceurs artisanales livrés avec soin.',
-    image: 'https://images.unsplash.com/photo-1517433670267-08bbd4be890f?q=80&w=1200&auto=format&fit=crop',
-    cta: 'Voir les produits',
-  },
-  {
-    id: 'hero-3',
-    badge: 'Express',
-    title: 'Un colis à livrer dans Brazzaville ou vers Pointe-Noire ?',
-    subtitle: 'Petits colis, coursiers disponibles et suivi rassurant pour chaque expédition.',
-    image: 'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?q=80&w=1200&auto=format&fit=crop',
-    cta: 'Expédier maintenant',
-  },
-] as const;
+type HeroSlide = {
+  id: string;
+  title: string;
+  subtitle?: string | null;
+  image: string;
+  cta: string;
+  linkType: string;
+  linkValue?: string | null;
+};
 
 function SkeletonCard({ height = 240 }: { height?: number }) {
   return (
@@ -108,18 +86,36 @@ export default function HomeScreen({ navigation }: Props) {
   const { user } = useAuth();
   const [query, setQuery] = useState('');
   const [cuisine, setCuisine] = useState<string | 'ALL'>('ALL');
-  const [mockItems, setMockItems] = useState<RestaurantModel[]>([]);
-  const [mockLoading, setMockLoading] = useState(MOCK_MODE);
-  const [products, setProducts] = useState<MockProduct[]>([]);
-  const [drivers, setDrivers] = useState<MockDriver[]>([]);
   const [locationLabel, setLocationLabel] = useState('Localisation en cours...');
   const [refreshing, setRefreshing] = useState(false);
-  const [activeCategory, setActiveCategory] = useState<string>('boissons');
-  const [selectedProduct, setSelectedProduct] = useState<MockProduct | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string>('');
+  const [selectedProduct, setSelectedProduct] = useState<CatalogProduct | null>(null);
+  const [selectedMenuItem, setSelectedMenuItem] = useState<MenuItemModel | null>(null);
   const { count, total, addItem } = useCart();
+  const { unreadCount } = useNotifications();
+  const { coords: userCoords } = useUserLocation();
+  const { marketId, deliveryFee: simpleDeliveryFee } = useMarketRestaurant();
   const heroScrollX = useRef(new Animated.Value(0)).current;
-  const heroListRef = useRef<FlatList<(typeof HERO_SLIDES)[number]> | null>(null);
+  const heroListRef = useRef<FlatList<HeroSlide> | null>(null);
   const heroIndexRef = useRef(0);
+
+  const { data: bannersData, refetch: refetchBanners } = useActiveHomeBannersQuery();
+  const { data: marketCategoriesData, refetch: refetchMarketCategories } = useActiveMarketCategoriesQuery();
+  useActiveCuisineTypesQuery();
+
+  const heroSlides = useMemo<HeroSlide[]>(() => {
+    const banners = bannersData?.activeHomeBanners ?? [];
+    return banners.map((banner) => ({
+      id: banner.id,
+      title: banner.title,
+      subtitle: banner.subtitle,
+      image: assetUrl(banner.imageUrl) ?? banner.imageUrl,
+      cta: banner.ctaLabel ?? 'Découvrir',
+      linkType: banner.linkType,
+      linkValue: banner.linkValue,
+    }));
+  }, [bannersData]);
+
   const { data, loading, error, refetch } = useSearchRestaurantsQuery({
     variables: {
       page: 1,
@@ -127,41 +123,65 @@ export default function HomeScreen({ navigation }: Props) {
       input: {
         query: query || undefined,
         cuisineType: cuisine === 'ALL' ? undefined : cuisine,
+        onlyActive: false,
+        excludeMarket: true,
+        featuredOnly: false,
       },
     },
-    skip: MOCK_MODE,
   });
 
-  useEffect(() => {
-    if (!MOCK_MODE) return;
-    let mounted = true;
-    setMockLoading(true);
-    getMockRestaurants({
-      query: query || undefined,
-      cuisineType: cuisine === 'ALL' ? undefined : cuisine,
-    }).then((items) => {
-      if (mounted) {
-        setMockItems(items);
-        setMockLoading(false);
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [query, cuisine]);
+  const { data: marketData, refetch: refetchMarket } = useSearchMenuItemsQuery({
+    variables: {
+      page: 1,
+      limit: 50,
+      input: { simpleProductsOnly: true },
+    },
+  });
+
+  const { data: featuredMarketData, refetch: refetchFeaturedMarket } = useSearchMenuItemsQuery({
+    variables: {
+      page: 1,
+      limit: 6,
+      input: { simpleProductsOnly: true, featuredOnly: true },
+    },
+  });
+
+  const { data: driversData, refetch: refetchDrivers } = useAvailableDriversQuery();
+
+  const marketMenuItems = marketData?.searchMenuItems.items ?? [];
+  const productCounts = useMemo(() => countProductsByCategory(marketMenuItems), [marketMenuItems]);
+  const homeCategories = useMemo(
+    () =>
+      mapApiMarketCategories(marketCategoriesData?.activeMarketCategories ?? [], productCounts),
+    [marketCategoriesData, productCounts],
+  );
+  const products = useMemo(() => marketMenuItems.map(menuItemToCatalogProduct), [marketMenuItems]);
+  const featuredMenuItems = featuredMarketData?.searchMenuItems.items ?? [];
+  const featuredProducts = useMemo(() => {
+    const featured = featuredMenuItems.map(menuItemToCatalogProduct);
+    if (featured.length >= 6) return featured.slice(0, 6);
+    const featuredIds = new Set(featuredMenuItems.map((item) => item.id));
+    const rest = marketMenuItems
+      .filter((item) => !featuredIds.has(item.id))
+      .map(menuItemToCatalogProduct);
+    return [...featured, ...rest].slice(0, 6);
+  }, [featuredMenuItems, marketMenuItems]);
+  const driversCount = driversData?.availableDrivers?.length ?? 0;
 
   useEffect(() => {
-    getMockProducts().then(setProducts);
-    getMockDrivers().then(setDrivers);
-  }, []);
+    if (homeCategories.length > 0 && !homeCategories.some((c) => c.key === activeCategory)) {
+      setActiveCategory(homeCategories[0].key);
+    }
+  }, [homeCategories, activeCategory]);
 
   const fetchLocation = useCallback(async () => {
+    const permission = await requestLocationPermission();
+    if (permission !== 'granted') {
+      setLocationLabel('Brazzaville');
+      promptLocationDenied(permission, fetchLocation);
+      return;
+    }
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setLocationLabel('Brazzaville');
-        return;
-      }
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
@@ -179,29 +199,31 @@ export default function HomeScreen({ navigation }: Props) {
     fetchLocation();
   }, [fetchLocation]);
 
-  const restaurants = MOCK_MODE ? mockItems : data?.searchRestaurants.items ?? [];
-  const isLoading = MOCK_MODE ? mockLoading : loading;
-  const hasError = MOCK_MODE ? false : !!error;
+  const restaurants = data?.searchRestaurants.items ?? [];
+  const isLoading = loading;
+  const hasError = !!error;
 
-  const featuredRestaurants = useMemo(
-    () =>
-      restaurants.map((restaurant, index) => ({
-        ...restaurant,
-        distanceKm: [1.2, 2.4, 3.8, 4.3, 5.1][index % 5],
-      })),
-    [restaurants],
-  );
+  const featuredRestaurants = useMemo(() => {
+    const sorted = [...restaurants].sort((a, b) => {
+      if (a.isFeatured !== b.isFeatured) return a.isFeatured ? -1 : 1;
+      return (a.sortOrder ?? 0) - (b.sortOrder ?? 0);
+    });
+    return sorted.slice(0, 6).map((restaurant) => ({
+      ...restaurant,
+      distanceKm: restaurantDistanceKm(userCoords, restaurant),
+      estimatedDeliveryTime: restaurant.estimatedDeliveryTime,
+    }));
+  }, [restaurants, userCoords]);
 
   const nearbyRestaurants = useMemo(
-    () => [...featuredRestaurants].sort((a, b) => a.distanceKm - b.distanceKm).slice(0, 3),
+    () =>
+      [...featuredRestaurants]
+        .sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999))
+        .slice(0, 3),
     [featuredRestaurants],
   );
 
-  const featuredProducts = useMemo(() => {
-    const selected = HOME_CATEGORIES.find((category) => category.key === activeCategory);
-    if (!selected) return products;
-    return products.filter((product) => product.category.toLowerCase() === selected.label.toLowerCase());
-  }, [activeCategory, products]);
+  const featuredProductsList = featuredProducts;
 
   const searchFocusAnim = useRef(new Animated.Value(0)).current;
   const cartTranslateY = useRef(new Animated.Value(120)).current;
@@ -264,7 +286,6 @@ export default function HomeScreen({ navigation }: Props) {
     (value: string) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       setCuisine(value);
-      if (MOCK_MODE) return;
       refetch({
         input: {
           query: query || undefined,
@@ -277,51 +298,33 @@ export default function HomeScreen({ navigation }: Props) {
 
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
-    if (MOCK_MODE) {
-      setMockLoading(true);
-      Promise.all([
-        getMockRestaurants({
-          query: query || undefined,
-          cuisineType: cuisine === 'ALL' ? undefined : cuisine,
-        }),
-        getMockProducts(),
-        getMockDrivers(),
-        fetchLocation(),
-      ]).then(([items, nextProducts, nextDrivers]) => {
-        setMockItems(items);
-        setProducts(nextProducts);
-        setDrivers(nextDrivers);
-        setMockLoading(false);
-        setRefreshing(false);
-      });
-      return;
-    }
-    refetch().finally(() => setRefreshing(false));
-  }, [query, cuisine, refetch, fetchLocation]);
+    Promise.all([
+      refetch(),
+      refetchMarket(),
+      refetchFeaturedMarket(),
+      refetchBanners(),
+      refetchMarketCategories(),
+      refetchDrivers(),
+      fetchLocation(),
+    ]).finally(() => setRefreshing(false));
+  }, [refetch, refetchMarket, refetchFeaturedMarket, refetchBanners, refetchMarketCategories, refetchDrivers, fetchLocation]);
 
   useEffect(() => {
+    if (heroSlides.length <= 1) return;
     const interval = setInterval(() => {
-      heroIndexRef.current = (heroIndexRef.current + 1) % HERO_SLIDES.length;
+      heroIndexRef.current = (heroIndexRef.current + 1) % heroSlides.length;
       heroListRef.current?.scrollToOffset({
         offset: heroIndexRef.current * HERO_SNAP,
         animated: true,
       });
     }, 4200);
     return () => clearInterval(interval);
-  }, []);
+  }, [heroSlides.length]);
 
   const handleHeroCta = useCallback(
-    (id: string) => {
+    (slide: HeroSlide) => {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      if (id === 'hero-3') {
-        navigation.navigate('Parcel');
-        return;
-      }
-      if (id === 'hero-2') {
-        navigation.navigate('Products');
-        return;
-      }
-      navigation.navigate('Restaurants');
+      navigateFromBanner(navigation, slide.linkType, slide.linkValue);
     },
     [navigation],
   );
@@ -329,25 +332,19 @@ export default function HomeScreen({ navigation }: Props) {
   const handleCategoryPress = useCallback((key: string) => {
     Haptics.selectionAsync();
     setActiveCategory(key);
-    const selected = HOME_CATEGORIES.find((category) => category.key === key);
+    const selected = homeCategories.find((category) => category.key === key);
     navigation.navigate('Products', selected ? { category: selected.label } : undefined);
-  }, [navigation]);
+  }, [navigation, homeCategories]);
 
   const handleProductModalAdd = useCallback(
     (quantity: number) => {
-      if (!selectedProduct) return;
+      if (!selectedMenuItem || !marketId) return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-      addItem(
-        menuItemFromProduct(selectedProduct),
-        MARKET_RESTAURANT_ID,
-        MARKET_RESTAURANT_NAME,
-        0,
-        undefined,
-        quantity,
-      );
+      addItem(selectedMenuItem, marketId, 'Produits particuliers', simpleDeliveryFee, undefined, quantity);
       setSelectedProduct(null);
+      setSelectedMenuItem(null);
     },
-    [selectedProduct, addItem],
+    [selectedMenuItem, marketId, simpleDeliveryFee, addItem],
   );
 
   const greetingName = user?.firstName || 'Client';
@@ -373,15 +370,38 @@ export default function HomeScreen({ navigation }: Props) {
               <Text style={styles.eyebrow}>Biso Livraison</Text>
               <Text style={styles.welcomeText}>Bonjour, {greetingName}</Text>
             </View>
-            <Pressable style={styles.avatarWrap} onPress={() => navigation.navigate('Profile')}>
-              {user?.avatarUrl ? (
-                <Image source={{ uri: assetUrl(user.avatarUrl) }} style={styles.avatar} />
-              ) : (
-                <View style={styles.avatarPlaceholder}>
-                  <Text style={styles.avatarInitial}>{(greetingName[0] || 'B').toUpperCase()}</Text>
-                </View>
-              )}
-            </Pressable>
+            <View style={styles.topActions}>
+              <Pressable
+                style={styles.topAction}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  navigation.navigate('Notifications');
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="notifications-outline" size={22} color="#fff" />
+                {unreadCount > 0 ? (
+                  <View style={styles.topActionBadge}>
+                    <Text style={styles.topActionBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+              <Pressable
+                style={styles.topAction}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  navigation.navigate('Cart');
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="cart-outline" size={22} color="#fff" />
+                {count > 0 ? (
+                  <View style={styles.topActionBadge}>
+                    <Text style={styles.topActionBadgeText}>{count > 99 ? '99+' : count}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            </View>
           </View>
 
           <View style={styles.locationRow}>
@@ -396,29 +416,26 @@ export default function HomeScreen({ navigation }: Props) {
 
           <Animated.View style={styles.searchContainer}>
             <Ionicons name="search" size={20} color={colors.textMuted} style={styles.searchIcon} />
-            <TextInput
+            <AppTextInput
               style={styles.search}
               value={query}
               onChangeText={(t) => {
                 setQuery(t);
-                if (MOCK_MODE) return;
                 refetch({
                   input: { query: t || undefined, cuisineType: cuisine === 'ALL' ? undefined : cuisine },
                 });
               }}
               placeholder="Restaurant, produit, gâteau, colis..."
-              placeholderTextColor={colors.textMuted}
             />
-            <View style={styles.searchMiniBadge}>
-              <Text style={styles.searchMiniBadgeText}>GPS</Text>
-            </View>
           </Animated.View>
         </LinearGradient>
 
         <View style={styles.heroSectionOuter}>
+          {heroSlides.length > 0 ? (
+            <>
           <Animated.FlatList
             ref={heroListRef}
-            data={HERO_SLIDES}
+            data={heroSlides}
             keyExtractor={(item) => item.id}
             horizontal
             pagingEnabled
@@ -440,18 +457,19 @@ export default function HomeScreen({ navigation }: Props) {
                   locations={[0, 0.45, 1]}
                   style={styles.heroOverlay}
                 />
-                <View style={styles.heroBadge}>
-                  <Text style={styles.heroBadgeText}>{item.badge}</Text>
-                </View>
                 <View style={styles.heroContent}>
-                  <Text style={styles.heroTitle}>{item.title}</Text>
-                  <Text style={styles.heroSubtitle} numberOfLines={2}>
+                  <Text style={styles.heroTitle} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                  <Text style={styles.heroSubtitle} numberOfLines={1}>
                     {item.subtitle}
                   </Text>
-                  <Pressable style={styles.heroCta} onPress={() => handleHeroCta(item.id)}>
-                    <Text style={styles.heroCtaText}>{item.cta}</Text>
+                  <Pressable style={styles.heroCta} onPress={() => handleHeroCta(item)}>
+                    <Text style={styles.heroCtaText} numberOfLines={1}>
+                      {item.cta}
+                    </Text>
                     <View style={styles.heroCtaIcon}>
-                      <Ionicons name="arrow-forward" size={14} color={colors.primary} />
+                      <Ionicons name="arrow-forward" size={13} color={colors.primary} />
                     </View>
                   </Pressable>
                 </View>
@@ -460,7 +478,7 @@ export default function HomeScreen({ navigation }: Props) {
           />
 
           <View style={styles.heroDots}>
-            {HERO_SLIDES.map((_, index) => {
+            {heroSlides.map((_, index) => {
               const width = heroScrollX.interpolate({
                 inputRange: [(index - 1) * HERO_SNAP, index * HERO_SNAP, (index + 1) * HERO_SNAP],
                 outputRange: [8, 26, 8],
@@ -474,6 +492,8 @@ export default function HomeScreen({ navigation }: Props) {
               return <Animated.View key={index} style={[styles.heroDot, { width, opacity }]} />;
             })}
           </View>
+            </>
+          ) : null}
         </View>
 
         <View style={styles.sectionBlock}>
@@ -484,7 +504,7 @@ export default function HomeScreen({ navigation }: Props) {
             </Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoriesRow}>
-            {HOME_CATEGORIES.map((category) => {
+            {homeCategories.map((category) => {
               const active = activeCategory === category.key;
               return (
                 <Pressable
@@ -493,7 +513,9 @@ export default function HomeScreen({ navigation }: Props) {
                   onPress={() => handleCategoryPress(category.key)}
                 >
                   <View style={[styles.categoryIconWrap, { backgroundColor: category.tint }]}>
-                    {category.lib === 'mci' ? (
+                    {category.lib === 'image' ? (
+                      <Image source={{ uri: assetUrl(category.icon) }} style={styles.categoryIconImage} />
+                    ) : category.lib === 'mci' ? (
                       <MaterialCommunityIcons name={category.icon as any} size={22} color={category.iconColor} />
                     ) : category.lib === 'feather' ? (
                       <Feather name={category.icon as any} size={20} color={category.iconColor} />
@@ -524,21 +546,28 @@ export default function HomeScreen({ navigation }: Props) {
                   style={styles.restaurantCard}
                   onPress={() => navigation.navigate('Restaurant', { id: restaurant.id, name: restaurant.name })}
                 >
-                  <Image source={{ uri: assetUrl(restaurant.imageUrl ?? restaurant.coverImageUrl) || undefined }} style={styles.restaurantImage} />
+                  <RestaurantCoverImage
+                    coverImageUrl={restaurant.coverImageUrl}
+                    logoImageUrl={restaurant.imageUrl}
+                    height={190}
+                    nameFallback={restaurant.name}
+                  />
                   <LinearGradient colors={['transparent', 'rgba(0,0,0,0.65)']} style={styles.restaurantImageOverlay} />
                   <View style={styles.restaurantRating}>
                     <Ionicons name="star" size={12} color="#fff" />
                     <Text style={styles.restaurantRatingText}>{restaurant.rating.toFixed(1)}</Text>
                   </View>
+                  <View style={styles.restaurantStatusBadge}>
+                    <OpenClosedBadge isOpen={restaurant.isActive} compact />
+                  </View>
                   <View style={styles.restaurantBody}>
                     <Text style={styles.restaurantName} numberOfLines={1}>{restaurant.name}</Text>
-                    <Text style={styles.restaurantMeta}>{restaurant.cuisineType} · {restaurant.city}</Text>
+                    <Text style={styles.restaurantMeta}>{formatCuisineDisplay(restaurant.cuisineType)} · {restaurant.city}</Text>
                     <View style={styles.metricsRow}>
-                      <MetricPill icon="location-outline" value={`${restaurant.distanceKm.toFixed(1)} km`} />
+                      {restaurant.distanceKm != null ? (
+                        <MetricPill icon="location-outline" value={`${restaurant.distanceKm.toFixed(1)} km`} />
+                      ) : null}
                       <MetricPill icon="time-outline" value={`${restaurant.estimatedDeliveryTime} min`} />
-                    </View>
-                    <View style={styles.metricsRow}>
-                      <MetricPill icon="pricetag-outline" value={`Dès ${formatPrice(computeDeliveryFee(restaurant.distanceKm))}`} />
                     </View>
                   </View>
                 </Pressable>
@@ -550,20 +579,24 @@ export default function HomeScreen({ navigation }: Props) {
         <View style={styles.sectionBlock}>
           <SectionHeader title="Produits populaires" subtitle="Boulangerie, gâteaux, douceurs et produits maison" action="Explorer" onPress={() => navigation.navigate('Products')} />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.horizontalList}>
-            {featuredProducts.map((product) => (
-              <Pressable key={product.id} style={styles.productCard} onPress={() => setSelectedProduct(product)}>
+            {featuredProductsList.map((product) => (
+              <Pressable
+                key={product.id}
+                style={styles.productCard}
+                onPress={() => {
+                  setSelectedProduct(product);
+                  setSelectedMenuItem(
+                    [...featuredMenuItems, ...marketMenuItems].find((item) => item.id === product.id) ??
+                      null,
+                  );
+                }}
+              >
                 <Image source={{ uri: product.imageUrl }} style={styles.productImage} />
-                {product.badge ? (
-                  <View style={styles.productBadge}>
-                    <Text style={styles.productBadgeText}>{product.badge}</Text>
-                  </View>
-                ) : null}
                 <View style={styles.productBody}>
                   <Text style={styles.productName} numberOfLines={1}>{product.name}</Text>
                   <Text style={styles.productSeller}>{product.seller}</Text>
                   <View style={styles.productFooter}>
                     <Text style={styles.productPrice}>{formatPrice(product.price)}</Text>
-                    <Text style={styles.productDistance}>{product.distanceKm.toFixed(1)} km</Text>
                   </View>
                 </View>
               </Pressable>
@@ -607,7 +640,7 @@ export default function HomeScreen({ navigation }: Props) {
                 <View style={{ flex: 1 }}>
                   <Text style={styles.driverCtaTitle}>Trouver un livreur express</Text>
                   <Text style={styles.driverCtaSubtitle}>
-                    {drivers.length} livreurs disponibles maintenant pour tes courses et tes colis.
+                    {driversCount} livreurs disponibles maintenant pour tes courses et tes colis.
                   </Text>
                 </View>
               </View>
@@ -619,7 +652,7 @@ export default function HomeScreen({ navigation }: Props) {
         </View>
 
         <View style={styles.sectionBlock}>
-          <SectionHeader title="Proche de chez moi" subtitle="3 restos sélectionnés autour de ta position" />
+          <SectionHeader title="Restaurants proches de chez moi" subtitle="3 restos sélectionnés autour de ta position" />
           <View style={styles.nearbyStack}>
             {nearbyRestaurants.map((restaurant) => (
               <Pressable
@@ -627,16 +660,28 @@ export default function HomeScreen({ navigation }: Props) {
                 style={styles.nearbyCard}
                 onPress={() => navigation.navigate('Restaurant', { id: restaurant.id, name: restaurant.name })}
               >
-                <Image source={{ uri: assetUrl(restaurant.imageUrl ?? restaurant.coverImageUrl) || undefined }} style={styles.nearbyImage} />
+                <RestaurantCoverImage
+                  coverImageUrl={restaurant.coverImageUrl}
+                  logoImageUrl={restaurant.imageUrl}
+                  width={92}
+                  height={92}
+                  borderRadius={radius.md}
+                  logoSize={30}
+                  nameFallback={restaurant.name}
+                />
                 <View style={styles.nearbyBody}>
                   <View style={styles.nearbyTopRow}>
                     <Text style={styles.nearbyName}>{restaurant.name}</Text>
                     <View style={styles.nearbyDistanceBadge}>
                       <Ionicons name="location-outline" size={12} color={colors.primary} />
-                      <Text style={styles.nearbyDistanceText}>{restaurant.distanceKm.toFixed(1)} km</Text>
+                      <Text style={styles.nearbyDistanceText}>
+                        {restaurant.distanceKm != null
+                          ? `${restaurant.distanceKm.toFixed(1)} km`
+                          : `${restaurant.estimatedDeliveryTime} min`}
+                      </Text>
                     </View>
                   </View>
-                  <Text style={styles.nearbyMeta}>{restaurant.cuisineType} · {restaurant.city}</Text>
+                  <Text style={styles.nearbyMeta}>{formatCuisineDisplay(restaurant.cuisineType)} · {restaurant.city}</Text>
                   <View style={styles.nearbyBottomRow}>
                     <Text style={styles.nearbyHint}>Livraison estimée {restaurant.estimatedDeliveryTime} min</Text>
                     <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
@@ -696,7 +741,6 @@ export default function HomeScreen({ navigation }: Props) {
         imageUrl={selectedProduct?.imageUrl}
         name={selectedProduct?.name ?? ''}
         price={selectedProduct?.price ?? 0}
-        badge={selectedProduct?.badge}
         categoryLabel={selectedProduct?.category}
         seller={selectedProduct?.seller}
         onAddToCart={(quantity) => handleProductModalAdd(quantity)}
@@ -768,6 +812,31 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   nameBlock: { flex: 1, paddingRight: spacing.md },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  topAction: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  topActionBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -4,
+    backgroundColor: colors.primary,
+    borderRadius: 9,
+    minWidth: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+    borderWidth: 2,
+    borderColor: colors.secondaryDark,
+  },
+  topActionBadgeText: { color: '#fff', fontSize: 9, fontFamily: fonts.bodyBold },
   eyebrow: {
     fontSize: 12,
     color: 'rgba(255,255,255,0.62)',
@@ -781,19 +850,6 @@ const styles = StyleSheet.create({
     fontFamily: fonts.titleBold,
     marginTop: 4,
   },
-  avatarWrap: { marginLeft: spacing.sm },
-  avatar: { width: 48, height: 48, borderRadius: 24, borderWidth: 2, borderColor: 'rgba(255,255,255,0.25)' },
-  avatarPlaceholder: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255,255,255,0.16)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.2)',
-  },
-  avatarInitial: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 18 },
   locationRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -840,17 +896,10 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bodyMedium,
     fontSize: 15,
   },
-  searchMiniBadge: {
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-  },
-  searchMiniBadgeText: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 11 },
   heroList: { paddingHorizontal: spacing.lg, paddingTop: 0 },
   heroCard: {
     width: HERO_CARD_WIDTH,
-    height: 250,
+    height: 125,
     marginRight: spacing.md,
     borderRadius: radius.xl,
     overflow: 'hidden',
@@ -859,38 +908,27 @@ const styles = StyleSheet.create({
   },
   heroImage: { width: '100%', height: '100%' },
   heroOverlay: { position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 },
-  heroBadge: {
-    position: 'absolute',
-    top: spacing.md,
-    left: spacing.md,
-    backgroundColor: colors.primary,
-    borderRadius: radius.full,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    ...shadows.glow(colors.primary),
-  },
-  heroBadgeText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 },
-  heroContent: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.lg },
-  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 19, lineHeight: 24 },
-  heroSubtitle: { color: 'rgba(255,255,255,0.85)', fontFamily: fonts.bodyMedium, fontSize: 13, marginTop: 6, lineHeight: 18 },
+  heroContent: { position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: spacing.sm + 2 },
+  heroTitle: { color: '#fff', fontFamily: fonts.titleBold, fontSize: 16, lineHeight: 20 },
+  heroSubtitle: { color: 'rgba(255,255,255,0.85)', fontFamily: fonts.bodyMedium, fontSize: 11, marginTop: 3, lineHeight: 14 },
   heroCta: {
-    marginTop: spacing.md,
+    marginTop: 8,
     alignSelf: 'flex-start',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     backgroundColor: '#fff',
     borderRadius: radius.full,
-    paddingLeft: 16,
-    paddingRight: 6,
-    paddingVertical: 6,
+    paddingLeft: 12,
+    paddingRight: 4,
+    paddingVertical: 4,
     ...shadows.md,
   },
-  heroCtaText: { color: colors.secondary, fontFamily: fonts.bodyBold, fontSize: 13 },
+  heroCtaText: { color: colors.secondary, fontFamily: fonts.bodyBold, fontSize: 12, maxWidth: 200 },
   heroCtaIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     backgroundColor: colors.primary,
     alignItems: 'center',
     justifyContent: 'center',
@@ -931,6 +969,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  categoryIconImage: {
+    width: 28,
+    height: 28,
+    resizeMode: 'contain',
+  },
   categoryText: { color: colors.secondary, fontFamily: fonts.bodyBold, fontSize: 12, textAlign: 'center' },
   categoryTextActive: { color: '#fff' },
   horizontalList: { paddingHorizontal: spacing.lg, gap: spacing.md },
@@ -963,6 +1006,7 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
   },
   restaurantRatingText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 12 },
+  restaurantStatusBadge: { position: 'absolute', top: spacing.sm, left: spacing.sm },
   restaurantBody: { padding: spacing.md, gap: 8 },
   restaurantName: { color: colors.secondary, fontFamily: fonts.titleBold, fontSize: 16 },
   restaurantMeta: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12 },
@@ -985,22 +1029,11 @@ const styles = StyleSheet.create({
     ...shadows.md,
   },
   productImage: { width: '100%', height: 150, backgroundColor: colors.border },
-  productBadge: {
-    position: 'absolute',
-    top: spacing.sm,
-    left: spacing.sm,
-    backgroundColor: colors.primary,
-    borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-  },
-  productBadgeText: { color: '#fff', fontFamily: fonts.bodyBold, fontSize: 11 },
   productBody: { padding: spacing.md },
   productName: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 14 },
   productSeller: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 11, marginTop: 4 },
-  productFooter: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: spacing.sm },
+  productFooter: { flexDirection: 'row', alignItems: 'center', marginTop: spacing.sm },
   productPrice: { color: colors.primary, fontFamily: fonts.titleBold, fontSize: 13 },
-  productDistance: { color: colors.textMuted, fontFamily: fonts.bodyBold, fontSize: 11 },
   parcelBanner: {
     marginHorizontal: spacing.lg,
     borderRadius: radius.xl,

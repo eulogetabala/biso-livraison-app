@@ -1,0 +1,30 @@
+mutation CreateParcel($input: CreateParcelInput!) {
+  createParcel(input: $input) {
+    id
+    status
+    receiverName
+    receiverPhone
+    receiverAddress
+    description
+    weight
+    createdAt
+  }
+}
+
+query MyParcels($page: Int = 1, $limit: Int = 20) {
+  myParcels(page: $page, limit: $limit) {
+    items {
+      id
+      status
+      receiverName
+      receiverPhone
+      receiverAddress
+      description
+      weight
+      createdAt
+    }
+    pageInfo {
+      totalItems
+    }
+  }
+}

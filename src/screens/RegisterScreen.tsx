@@ -6,7 +6,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   Pressable,
   Image,
@@ -14,14 +13,13 @@ import {
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useLoginMutation, useRegisterMutation } from '../graphql/operations';
-import { useAuth } from '../lib/auth';
+import { useRequestOtpMutation } from '../graphql/operations';
+import { isValidCongoPhoneInput, congoPhoneValidationMessage } from '../lib/phone';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
 import { Ionicons } from '@expo/vector-icons';
 import PhoneInput from '../components/PhoneInput';
-import { MOCK_MODE } from '../config/mock';
-import { mockRequestOtp } from '../mocks/service';
+import { AppTextInput } from '../components/AppTextInput';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -30,16 +28,16 @@ const { width } = Dimensions.get('window');
 type Props = NativeStackScreenProps<RootStackParamList, 'Register'>;
 
 export default function RegisterScreen({ navigation }: Props) {
-  const { setTokenAndUser } = useAuth();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [phone, setPhone] = useState('');
   const [countryCode, setCountryCode] = useState('+242');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [register, { loading: registering }] = useRegisterMutation();
-  const [login, { loading: loggingIn }] = useLoginMutation();
+  const [requestOtp, { loading }] = useRequestOtpMutation();
 
   const cardScale = useRef(new Animated.Value(0.92)).current;
   const cardOpacity = useRef(new Animated.Value(0)).current;
@@ -51,6 +49,7 @@ export default function RegisterScreen({ navigation }: Props) {
   const lNameFocus = useRef(new Animated.Value(0)).current;
   const phoneFocus = useRef(new Animated.Value(0)).current;
   const passFocus = useRef(new Animated.Value(0)).current;
+  const confirmPassFocus = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     Animated.stagger(150, [
@@ -75,7 +74,7 @@ export default function RegisterScreen({ navigation }: Props) {
 
   const handleSubmit = async () => {
     setError(null);
-    if (!firstName.trim() || !lastName.trim() || !phone.trim() || !password) {
+    if (!firstName.trim() || !lastName.trim() || !phone.trim() || !password || !confirmPassword) {
       setError('Veuillez remplir tous les champs.');
       return;
     }
@@ -83,47 +82,41 @@ export default function RegisterScreen({ navigation }: Props) {
       setError('Le mot de passe doit contenir au moins 6 caractères.');
       return;
     }
+    if (password !== confirmPassword) {
+      setError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+    if (!isValidCongoPhoneInput(phone)) {
+      setError(congoPhoneValidationMessage());
+      return;
+    }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const fullPhone = `${countryCode}${phone}`.replace(/\s+/g, '');
     try {
-      if (MOCK_MODE) {
-        await mockRequestOtp(`${countryCode}${phone}`.replace(/\s+/g, ''));
-        navigation.navigate('Otp', {
-          phone: `${countryCode}${phone}`.replace(/\s+/g, ''),
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
-          password,
-        });
-        return;
-      }
-      await register({
-        variables: {
-          input: {
-            email: `${countryCode}${phone}`.replace(/\s+/g, '') + '@phone.biso',
-            firstName: firstName.trim(),
-            lastName: lastName.trim(),
-            phone: `${countryCode}${phone}`.replace(/\s+/g, ''),
-            password,
-          },
-        },
+      await requestOtp({
+        variables: { input: { phone: fullPhone } },
       });
-      const { data } = await login({
-        variables: { input: { email: `${countryCode}${phone}`.replace(/\s+/g, '') + '@phone.biso', password } },
-      });
-      if (!data?.login) throw new Error('Réponse invalide du serveur.');
-      await setTokenAndUser(data.login.accessToken, data.login.user);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      navigation.replace('Main');
+      navigation.navigate('Otp', {
+        phone: fullPhone,
+        firstName: firstName.trim(),
+        lastName: lastName.trim(),
+        password,
+      });
     } catch (e) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      const raw = e instanceof Error ? e.message : '';
       const message =
-        e instanceof Error && e.message.toLowerCase().includes('email')
-          ? 'Ce numéro est déjà utilisé.'
-          : 'Inscription impossible. Vérifiez vos informations et réessayez.';
+        raw.includes('incomplet') || raw.includes('06') || raw.toLowerCase().includes('phone')
+          ? raw || 'Numéro de téléphone invalide. Vérifiez votre saisie.'
+          : raw || "Envoi du code impossible. Vérifiez votre connexion et réessayez.";
       setError(message);
     }
   };
 
-  const isLoading = registering || loggingIn;
+  const isLoading = loading;
+  const confirmPassMismatch =
+    confirmPassword.length > 0 && password !== confirmPassword;
 
   return (
     <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -171,12 +164,10 @@ export default function RegisterScreen({ navigation }: Props) {
                 <View style={styles.inputIconCircle}>
                   <Ionicons name="person-outline" size={14} color={colors.primary} />
                 </View>
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   value={firstName}
                   onChangeText={setFirstName}
-                  placeholder="Jean"
-                  placeholderTextColor={colors.textMuted}
                   onFocus={() => animateInput(fNameFocus, 1)}
                   onBlur={() => animateInput(fNameFocus, 0)}
                 />
@@ -188,12 +179,10 @@ export default function RegisterScreen({ navigation }: Props) {
                 <View style={styles.inputIconCircle}>
                   <Ionicons name="person-outline" size={14} color={colors.primary} />
                 </View>
-                <TextInput
+                <AppTextInput
                   style={styles.input}
                   value={lastName}
                   onChangeText={setLastName}
-                  placeholder="Mbemba"
-                  placeholderTextColor={colors.textMuted}
                   onFocus={() => animateInput(lNameFocus, 1)}
                   onBlur={() => animateInput(lNameFocus, 0)}
                 />
@@ -213,7 +202,6 @@ export default function RegisterScreen({ navigation }: Props) {
                 countryCode={countryCode}
                 onChange={setPhone}
                 onCountryChange={setCountryCode}
-                placeholder="06 XXX XX XX"
                 onFocus={() => animateInput(phoneFocus, 1)}
                 onBlur={() => animateInput(phoneFocus, 0)}
               />
@@ -227,12 +215,10 @@ export default function RegisterScreen({ navigation }: Props) {
               <View style={styles.inputIconCircle}>
                 <Ionicons name="lock-closed-outline" size={14} color={colors.primary} />
               </View>
-              <TextInput
+              <AppTextInput
                 style={styles.input}
                 value={password}
                 onChangeText={setPassword}
-                placeholder="Au moins 6 caractères"
-                placeholderTextColor={colors.textMuted}
                 secureTextEntry={!showPassword}
                 autoComplete="new-password"
                 onFocus={() => animateInput(passFocus, 1)}
@@ -246,6 +232,47 @@ export default function RegisterScreen({ navigation }: Props) {
                 />
               </Pressable>
             </Animated.View>
+          </View>
+
+          {/* Confirm password */}
+          <View style={styles.inputGroup}>
+            <Text style={styles.label}>Répéter le mot de passe</Text>
+            <Animated.View
+              style={[
+                styles.inputWrapper,
+                {
+                  borderColor: confirmPassMismatch
+                    ? colors.danger
+                    : makeBorder(confirmPassFocus),
+                },
+              ]}
+            >
+              <View style={styles.inputIconCircle}>
+                <Ionicons name="lock-closed-outline" size={14} color={colors.primary} />
+              </View>
+              <AppTextInput
+                style={styles.input}
+                value={confirmPassword}
+                onChangeText={setConfirmPassword}
+                secureTextEntry={!showConfirmPassword}
+                autoComplete="new-password"
+                onFocus={() => animateInput(confirmPassFocus, 1)}
+                onBlur={() => animateInput(confirmPassFocus, 0)}
+              />
+              <Pressable
+                style={styles.eyeBtn}
+                onPress={() => setShowConfirmPassword(!showConfirmPassword)}
+              >
+                <Ionicons
+                  name={showConfirmPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={20}
+                  color={colors.textMuted}
+                />
+              </Pressable>
+            </Animated.View>
+            {confirmPassMismatch ? (
+              <Text style={styles.mismatchText}>Les mots de passe ne correspondent pas</Text>
+            ) : null}
           </View>
 
           {/* Password strength hint */}
@@ -427,6 +454,12 @@ const styles = StyleSheet.create({
   eyeBtn: {
     padding: 6,
     marginLeft: 4,
+  },
+  mismatchText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    marginTop: 6,
   },
   strengthRow: {
     flexDirection: 'row',

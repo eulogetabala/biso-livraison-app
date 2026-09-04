@@ -4,32 +4,53 @@ import MapView, { Marker } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
-import { getMockRestaurantCoordinates } from '../mocks/service';
-import { mockRestaurants } from '../mocks/data';
+import { useSearchRestaurantsQuery } from '../graphql/operations';
+import { distanceKmBetween, restaurantCoords, restaurantDistanceKm } from '../lib/geo-data';
+import { useUserLocation } from '../lib/user-location';
 import { assetUrl } from '../lib/api';
 import { colors, fonts, radius, shadows, spacing } from '../theme';
 import FloatingBackButton from '../components/FloatingBackButton';
+import { TAB_BAR_OFFSET } from '../components/AppTabBar';
+import { SkeletonBlock } from '../components/ui';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'NearbyMap'>;
 
 export default function NearbyMapScreen({ navigation }: Props) {
-  const restaurants = useMemo(() => mockRestaurants.slice(0, 3), []);
+  const { data, loading } = useSearchRestaurantsQuery({
+    variables: { page: 1, limit: 20, input: { onlyActive: true, excludeMarket: true } },
+  });
+
+  const restaurants = useMemo(() => data?.searchRestaurants.items ?? [], [data]);
+
   const mapRef = useRef<MapView>(null);
-  const [selectedId, setSelectedId] = useState(restaurants[0]?.id);
   const insets = useSafeAreaInsets();
+  const { coords: userCoords } = useUserLocation();
+  const [selectedId, setSelectedId] = useState<string | undefined>();
+
+  const nearbyRestaurants = useMemo(() => {
+    const withDistance = restaurants.map((restaurant) => ({
+      ...restaurant,
+      coords: restaurantCoords(restaurant),
+      distanceKm: restaurantDistanceKm(userCoords, restaurant),
+    }));
+    return withDistance
+      .filter((r) => r.coords)
+      .sort((a, b) => (a.distanceKm ?? 999) - (b.distanceKm ?? 999))
+      .slice(0, 6);
+  }, [restaurants, userCoords]);
+
+  React.useEffect(() => {
+    if (!selectedId && nearbyRestaurants[0]?.id) {
+      setSelectedId(nearbyRestaurants[0].id);
+    }
+  }, [nearbyRestaurants, selectedId]);
 
   const focusRestaurant = (id: string) => {
     setSelectedId(id);
-    const coords = getMockRestaurantCoordinates(id);
+    const restaurant = nearbyRestaurants.find((r) => r.id === id);
+    const coords = restaurant ? restaurantCoords(restaurant) : null;
     if (!coords) return;
-    mapRef.current?.animateToRegion(
-      {
-        ...coords,
-        latitudeDelta: 0.022,
-        longitudeDelta: 0.022,
-      },
-      450,
-    );
+    mapRef.current?.animateToRegion({ ...coords, latitudeDelta: 0.022, longitudeDelta: 0.022 }, 450);
   };
 
   return (
@@ -38,19 +59,26 @@ export default function NearbyMapScreen({ navigation }: Props) {
         ref={mapRef}
         style={StyleSheet.absoluteFill}
         initialRegion={{
-          latitude: -4.2634,
-          longitude: 15.2520,
+          latitude: userCoords?.latitude ?? -4.2634,
+          longitude: userCoords?.longitude ?? 15.252,
           latitudeDelta: 0.045,
           longitudeDelta: 0.045,
         }}
       >
-        {restaurants.map((restaurant) => {
-          const coords = getMockRestaurantCoordinates(restaurant.id);
-          if (!coords) return null;
+        {userCoords ? (
+          <Marker coordinate={userCoords} anchor={{ x: 0.5, y: 0.5 }}>
+            <View style={styles.userMarker}>
+              <View style={styles.userMarkerDot} />
+            </View>
+          </Marker>
+        ) : null}
+
+        {nearbyRestaurants.map((restaurant) => {
+          if (!restaurant.coords) return null;
           return (
             <Marker
               key={restaurant.id}
-              coordinate={coords}
+              coordinate={restaurant.coords}
               title={restaurant.name}
               description={`${restaurant.cuisineType} · ${restaurant.city}`}
               onPress={() => focusRestaurant(restaurant.id)}
@@ -70,30 +98,36 @@ export default function NearbyMapScreen({ navigation }: Props) {
         <Text style={styles.title}>Restaurants proches</Text>
       </View>
 
-      <FloatingBackButton
-        navigation={navigation}
-        background="rgba(255,255,255,0.94)"
-        topOffset={16}
-      />
+      <FloatingBackButton navigation={navigation} background="rgba(255,255,255,0.94)" topOffset={16} />
 
       <View style={styles.bottomSheet}>
-        {restaurants.map((restaurant) => (
-          <Pressable
-            key={restaurant.id}
-            style={[styles.item, selectedId === restaurant.id && styles.itemActive]}
-            onPress={() => focusRestaurant(restaurant.id)}
-          >
-            <Image source={{ uri: assetUrl(restaurant.imageUrl ?? restaurant.coverImageUrl) || undefined }} style={styles.image} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.name}>{restaurant.name}</Text>
-              <Text style={styles.meta}>{restaurant.cuisineType} · {restaurant.city}</Text>
-            </View>
-            <View style={styles.pinPreview}>
-              <View style={styles.pinPreviewDot} />
-              <Text style={styles.pinPreviewText}>Biso</Text>
-            </View>
-          </Pressable>
-        ))}
+        {loading && nearbyRestaurants.length === 0 ? (
+          <SkeletonBlock width="100%" height={64} />
+        ) : (
+          nearbyRestaurants.map((restaurant) => (
+            <Pressable
+              key={restaurant.id}
+              style={[styles.item, selectedId === restaurant.id && styles.itemActive]}
+              onPress={() => focusRestaurant(restaurant.id)}
+            >
+              <Image
+                source={{ uri: assetUrl(restaurant.imageUrl ?? restaurant.coverImageUrl) || undefined }}
+                style={styles.image}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.name}>{restaurant.name}</Text>
+                <Text style={styles.meta}>{restaurant.cuisineType} · {restaurant.city}</Text>
+                {restaurant.distanceKm != null ? (
+                  <Text style={styles.distance}>À {restaurant.distanceKm.toFixed(1)} km de vous</Text>
+                ) : null}
+              </View>
+              <View style={styles.pinPreview}>
+                <View style={styles.pinPreviewDot} />
+                <Text style={styles.pinPreviewText}>Biso</Text>
+              </View>
+            </Pressable>
+          ))
+        )}
       </View>
     </View>
   );
@@ -116,7 +150,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
-    bottom: 16,
+    bottom: TAB_BAR_OFFSET + 8,
     backgroundColor: colors.surface,
     borderRadius: radius.lg,
     padding: spacing.md,
@@ -124,11 +158,7 @@ const styles = StyleSheet.create({
     ...shadows.lg,
   },
   item: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  itemActive: {
-    backgroundColor: colors.background,
-    borderRadius: radius.md,
-    padding: spacing.xs,
-  },
+  itemActive: { backgroundColor: colors.background, borderRadius: radius.md, padding: spacing.xs },
   image: { width: 52, height: 52, borderRadius: radius.sm, backgroundColor: colors.border },
   name: { color: colors.secondary, fontFamily: fonts.titleSemiBold, fontSize: 14 },
   meta: { color: colors.textMuted, fontFamily: fonts.bodyMedium, fontSize: 12, marginTop: 3 },
@@ -165,4 +195,16 @@ const styles = StyleSheet.create({
     borderColor: '#fff',
   },
   markerStemActive: { backgroundColor: colors.primary },
+  userMarker: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.primary + '33',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: colors.primary,
+  },
+  userMarkerDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.primary },
+  distance: { color: colors.primary, fontFamily: fonts.bodyBold, fontSize: 11, marginTop: 3 },
 });

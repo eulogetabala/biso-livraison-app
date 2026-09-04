@@ -15,7 +15,7 @@ export type RootStackParamList = {
   Restaurant: { id: string; name: string };
   Checkout: undefined;
   Orders: undefined;
-  OrderDetail: { id: string };
+  OrderDetail: { id: string; confirmation?: boolean };
   Drivers: undefined;
   DriverDetail: { id: string };
   NearbyMap: undefined;
@@ -23,6 +23,9 @@ export type RootStackParamList = {
   Restaurants: undefined;
   Products: { category?: string } | undefined;
   Parcel: undefined;
+  Notifications: undefined;
+  EditProfile: undefined;
+  ForgotPassword: undefined;
 };
 
 export type MainTabParamList = {

@@ -12,7 +12,15 @@ export const TAB_BAR_HEIGHT = 68;
 export const TAB_BAR_OFFSET = TAB_BAR_BOTTOM + TAB_BAR_HEIGHT + 8;
 
 /** Écrans qui possèdent déjà leur propre barre (auth, tabs) → pas de menu global. */
-const HIDDEN_ROUTES = new Set(['Splash', 'Onboarding', 'Login', 'Register', 'Otp', 'Main']);
+const HIDDEN_ROUTES = new Set([
+  'Splash',
+  'Onboarding',
+  'Login',
+  'Register',
+  'Otp',
+  'ForgotPassword',
+  'Main',
+]);
 
 /** Associe chaque écran stack au tab auquel il appartient. */
 const ROUTE_TO_TAB: Record<string, 'Home' | 'Favorites' | 'Cart' | 'Profile'> = {
@@ -25,6 +33,7 @@ const ROUTE_TO_TAB: Record<string, 'Home' | 'Favorites' | 'Cart' | 'Profile'> = 
   Drivers: 'Home',
   DriverDetail: 'Home',
   NearbyMap: 'Home',
+  Notifications: 'Home',
   Favorites: 'Favorites',
   Cart: 'Cart',
   Checkout: 'Cart',

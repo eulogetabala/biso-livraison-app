@@ -1,0 +1,37 @@
+query AvailableDrivers {
+  availableDrivers {
+    id
+    userId
+    vehicleType
+    isAvailable
+    rating
+    reviewCount
+    user {
+      id
+      firstName
+      lastName
+      phone
+    }
+    createdAt
+    updatedAt
+  }
+}
+
+query Driver($id: ID!) {
+  driver(id: $id) {
+    id
+    userId
+    vehicleType
+    isAvailable
+    rating
+    reviewCount
+    user {
+      id
+      firstName
+      lastName
+      phone
+    }
+    createdAt
+    updatedAt
+  }
+}

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import FavoritesScreen from '../screens/FavoritesScreen';
 import CartScreen from '../screens/CartScreen';
 import ProfileScreen from '../screens/ProfileScreen';
 import { useCart } from '../lib/cart';
+import { useNotifications } from '../lib/notifications';
 import { colors, radius, fonts, shadows } from '../theme';
 import type { MainTabParamList } from './types';
 
@@ -40,6 +41,18 @@ function TabIcon({
 
 export default function MainTabs() {
   const { count } = useCart();
+  const { requestPermission } = useNotifications();
+  const permissionRequested = useRef(false);
+
+  // Demande la permission de notification une seule fois, peu après l'entrée dans l'app.
+  useEffect(() => {
+    if (permissionRequested.current) return;
+    permissionRequested.current = true;
+    const timer = setTimeout(() => {
+      requestPermission();
+    }, 1200);
+    return () => clearTimeout(timer);
+  }, [requestPermission]);
 
   return (
     <Tab.Navigator

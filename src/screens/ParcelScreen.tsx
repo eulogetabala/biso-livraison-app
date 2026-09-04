@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,8 +21,20 @@ import type { RootStackParamList } from '../navigation/types';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import FloatingBackButton from '../components/FloatingBackButton';
 import PhoneInput from '../components/PhoneInput';
+import { AppTextInput } from '../components/AppTextInput';
 import AddressPickerModal from '../components/AddressPickerModal';
+import { useCreateParcelMutation } from '../graphql/operations';
+import { useAuth } from '../lib/auth';
+import { getGraphqlErrorMessage, isUnauthorizedError } from '../lib/graphql-errors';
+import { getStoredToken } from '../lib/token-storage';
+import { requestLocationPermission, promptLocationDenied } from '../lib/permissions';
 import { TAB_BAR_OFFSET } from '../components/AppTabBar';
+
+function formatCongoPhone(raw: string): string {
+  let digits = raw.replace(/\D/g, '');
+  if (digits.startsWith('242')) digits = digits.slice(3);
+  return `+242${digits}`;
+}
 
 type Props = NativeStackScreenProps<RootStackParamList, 'Parcel'>;
 
@@ -55,6 +68,7 @@ const STEP_LABELS: Record<Step, string> = {
 
 export default function ParcelScreen({ navigation }: Props) {
   const insets = useSafeAreaInsets();
+  const { user, logout } = useAuth();
   const [step, setStep] = useState<Step>(1);
   const [destination, setDestination] = useState<Destination | null>(null);
   const [myPosition, setMyPosition] = useState<string>('Brazzaville');
@@ -63,9 +77,10 @@ export default function ParcelScreen({ navigation }: Props) {
   // Étape 2 – adresse
   const [pickupAddress, setPickupAddress] = useState('');
   const [dropoffAddress, setDropoffAddress] = useState('');
-  const [pickupManual, setPickupManual] = useState(false);
-  const [dropoffManual, setDropoffManual] = useState(false);
   const [pickerTarget, setPickerTarget] = useState<'pickup' | 'dropoff' | null>(null);
+  const [pickerInitialMode, setPickerInitialMode] = useState<'map' | 'manual'>('map');
+  const [pickupCoords, setPickupCoords] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [dropoffCoords, setDropoffCoords] = useState<{ latitude: number; longitude: number } | null>(null);
 
   // Étape 3 – colis
   const [parcelType, setParcelType] = useState<string | null>(null);
@@ -77,6 +92,9 @@ export default function ParcelScreen({ navigation }: Props) {
   const [receiverPhone, setReceiverPhone] = useState('');
   const [note, setNote] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [createdParcelId, setCreatedParcelId] = useState<string | null>(null);
+  const [createParcel, { loading: creatingParcel }] = useCreateParcelMutation();
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
@@ -108,16 +126,17 @@ export default function ParcelScreen({ navigation }: Props) {
 
   const locateAddress = async (target: 'pickup' | 'dropoff') => {
     setLocating(true);
+    const permission = await requestLocationPermission();
+    if (permission !== 'granted') {
+      const fallback = 'Moungali, Brazzaville';
+      setMyPosition(fallback);
+      if (target === 'pickup') setPickupAddress(fallback);
+      else setDropoffAddress(fallback);
+      setLocating(false);
+      promptLocationDenied(permission, () => locateAddress(target));
+      return;
+    }
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        const fallback = 'Moungali, Brazzaville';
-        setMyPosition(fallback);
-        if (target === 'pickup') setPickupAddress(fallback);
-        else setDropoffAddress(fallback);
-        setLocating(false);
-        return;
-      }
       const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const places = await Location.reverseGeocodeAsync(position.coords);
       const place = places[0];
@@ -125,13 +144,8 @@ export default function ParcelScreen({ navigation }: Props) {
       const city = place?.city && place.city !== district ? `, ${place.city}` : ', Brazzaville';
       const address = `${district}${city}`;
       setMyPosition(address);
-      if (target === 'pickup') {
-        setPickupAddress(address);
-        setPickupManual(false);
-      } else {
-        setDropoffAddress(address);
-        setDropoffManual(false);
-      }
+      if (target === 'pickup') setPickupAddress(address);
+      else setDropoffAddress(address);
     } catch {
       setMyPosition('Brazzaville');
       if (target === 'pickup') setPickupAddress('Brazzaville');
@@ -158,15 +172,78 @@ export default function ParcelScreen({ navigation }: Props) {
       case 3:
         return parcelType != null && (parcelType !== 'Autre' || customType.trim().length > 0);
       case 4:
-        return receiverName.trim().length > 0 && receiverPhone.trim().length > 0;
+        return (
+          receiverName.trim().length >= 2 &&
+          receiverPhone.replace(/\D/g, '').length >= 9
+        );
       default:
         return false;
     }
   })();
 
-  const handleConfirm = () => {
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setSubmitted(true);
+  const handleConfirm = async () => {
+    if (!canContinue || creatingParcel) return;
+    Keyboard.dismiss();
+    setSubmitError(null);
+
+    const token = await getStoredToken();
+    if (!user || !token) {
+      setSubmitError('Connectez-vous pour expédier un colis.');
+      navigation.navigate('Login');
+      return;
+    }
+
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
+      const parcelTypeLabel = parcelType === 'Autre' ? customType.trim() : parcelType;
+      const weightLabel = WEIGHTS.find((w) => w.key === weight)?.label ?? '1 kg';
+      const description = [
+        parcelTypeLabel,
+        weightLabel,
+        destination === 'intercity' ? 'Interville Brazzaville → Pointe-Noire' : 'Brazzaville',
+        note.trim() ? `Note: ${note.trim()}` : null,
+        pickupAddress.trim() ? `Ramassage: ${pickupAddress.trim()}` : null,
+      ]
+        .filter(Boolean)
+        .join(' | ');
+
+      const { data } = await createParcel({
+        variables: {
+          input: {
+            receiverName: receiverName.trim(),
+            receiverPhone: formatCongoPhone(receiverPhone),
+            receiverAddress: dropoffAddress.trim(),
+            description,
+            weight: weight === 'petit' ? 1 : weight === 'moyen' ? 3 : 8,
+          },
+        },
+      });
+      setCreatedParcelId(data?.createParcel.id ?? null);
+      setSubmitted(true);
+    } catch (e) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      if (isUnauthorizedError(e)) {
+        setSubmitError('Session expirée. Reconnectez-vous pour continuer.');
+        await logout();
+        navigation.navigate('Login');
+        return;
+      }
+      const raw = getGraphqlErrorMessage(e, '');
+      const lower = raw.toLowerCase();
+      const message =
+        lower.includes('phone') || lower.includes('receiverphone')
+          ? 'Numéro de téléphone du destinataire invalide.'
+          : lower.includes('serveur') || lower.includes('network') || lower.includes('fetch')
+            ? 'Impossible de joindre le serveur. Vérifiez votre connexion.'
+            : raw || 'Impossible d\'envoyer la demande. Réessayez.';
+      setSubmitError(message);
+    }
+  };
+
+  const openAddressPicker = (target: 'pickup' | 'dropoff', mode: 'map' | 'manual' = 'map') => {
+    Haptics.selectionAsync();
+    setPickerInitialMode(mode);
+    setPickerTarget(target);
   };
 
   const handleBackHome = () => {
@@ -189,9 +266,14 @@ export default function ParcelScreen({ navigation }: Props) {
   }
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + 8 : 0}
+    >
       <FloatingBackButton navigation={navigation} />
       <ScrollView
+        style={styles.scroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.content}
@@ -225,6 +307,16 @@ export default function ParcelScreen({ navigation }: Props) {
         </LinearGradient>
 
         <Animated.View style={[styles.stepBody, { opacity: fadeAnim }]}>
+          {!user ? (
+            <Pressable style={styles.authBanner} onPress={() => navigation.navigate('Login')}>
+              <Ionicons name="log-in-outline" size={18} color={colors.primary} />
+              <Text style={styles.authBannerText}>
+                Connectez-vous pour expédier un colis
+              </Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+            </Pressable>
+          ) : null}
+
           {step === 1 ? (
             <DestinationStep
               destination={destination}
@@ -243,20 +335,8 @@ export default function ParcelScreen({ navigation }: Props) {
             <AddressStep
               pickupAddress={pickupAddress}
               dropoffAddress={dropoffAddress}
-              pickupManual={pickupManual}
-              dropoffManual={dropoffManual}
-              onPickupManualToggle={() => {
-                Haptics.selectionAsync();
-                setPickupManual((v) => !v);
-              }}
-              onDropoffManualToggle={() => {
-                Haptics.selectionAsync();
-                setDropoffManual((v) => !v);
-              }}
-              onPickupChange={setPickupAddress}
-              onDropoffChange={setDropoffAddress}
-              onLocatePickup={() => setPickerTarget('pickup')}
-              onLocateDropoff={() => setPickerTarget('dropoff')}
+              onOpenPickup={(mode) => openAddressPicker('pickup', mode)}
+              onOpenDropoff={(mode) => openAddressPicker('dropoff', mode)}
             />
           ) : null}
 
@@ -278,21 +358,49 @@ export default function ParcelScreen({ navigation }: Props) {
           ) : null}
 
           {step === 4 ? (
-            <ReceiverStep
-              receiverName={receiverName}
-              receiverPhone={receiverPhone}
-              note={note}
-              onName={setReceiverName}
-              onPhone={setReceiverPhone}
-              onNote={setNote}
-              price={price}
-              destination={destination ?? 'local'}
-            />
+            <>
+              <ReceiverStep
+                receiverName={receiverName}
+                receiverPhone={receiverPhone}
+                note={note}
+                onName={setReceiverName}
+                onPhone={setReceiverPhone}
+                onNote={setNote}
+                price={price}
+                destination={destination ?? 'local'}
+              />
+
+              {submitError ? <Text style={styles.submitError}>{submitError}</Text> : null}
+
+              <View style={styles.step4Actions}>
+                <Pressable style={styles.backBtnInline} onPress={goBack}>
+                  <Ionicons name="arrow-back" size={20} color={colors.secondary} />
+                </Pressable>
+                <TouchableOpacity
+                  style={[styles.nextBtnWrap, (!canContinue || creatingParcel) && styles.nextBtnDisabled]}
+                  disabled={!canContinue || creatingParcel}
+                  activeOpacity={0.85}
+                  onPress={handleConfirm}
+                >
+                  <LinearGradient
+                    colors={[colors.primary, colors.primaryDark]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.nextBtn}
+                  >
+                    <Ionicons name="paper-plane-outline" size={17} color="#fff" />
+                    <Text style={styles.nextText}>
+                      {creatingParcel ? 'Envoi…' : `Expédier · ${price.toLocaleString('fr-FR')} FCFA`}
+                    </Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </>
           ) : null}
         </Animated.View>
       </ScrollView>
 
-      {/* Bottom bar */}
+      {/* Bottom bar — étapes 1 à 3 uniquement */}
       {step < 4 ? (
         <View style={[styles.bottomBar, styles.bottomBarWithTabs]}>
           {step > 1 ? (
@@ -318,33 +426,13 @@ export default function ParcelScreen({ navigation }: Props) {
             </LinearGradient>
           </Pressable>
         </View>
-      ) : (
-        <View style={[styles.bottomBar, styles.bottomBarWithTabs]}>
-          <Pressable style={styles.backBtn} onPress={goBack}>
-            <Ionicons name="arrow-back" size={20} color={colors.secondary} />
-          </Pressable>
-          <Pressable
-            style={[styles.nextBtnWrap, !canContinue && styles.nextBtnDisabled]}
-            disabled={!canContinue}
-            onPress={handleConfirm}
-          >
-            <LinearGradient
-              colors={[colors.primary, colors.primaryDark]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.nextBtn}
-            >
-              <Ionicons name="paper-plane-outline" size={17} color="#fff" />
-              <Text style={styles.nextText}>Expédier · {price.toLocaleString('fr-FR')} FCFA</Text>
-            </LinearGradient>
-          </Pressable>
-        </View>
-      )}
+      ) : null}
 
       {/* Sélecteur d'adresse sur la carte */}
       <AddressPickerModal
         visible={pickerTarget != null}
         target={pickerTarget ?? 'pickup'}
+        initialMode={pickerInitialMode}
         initialAddress={pickerTarget === 'pickup' ? pickupAddress : dropoffAddress}
         defaultCity={
           destination === 'intercity' && pickerTarget === 'dropoff'
@@ -352,13 +440,13 @@ export default function ParcelScreen({ navigation }: Props) {
             : 'brazzaville'
         }
         onClose={() => setPickerTarget(null)}
-        onConfirm={(address) => {
+        onConfirm={(address, coords) => {
           if (pickerTarget === 'pickup') {
             setPickupAddress(address);
-            setPickupManual(false);
+            setPickupCoords(coords ?? null);
           } else {
             setDropoffAddress(address);
-            setDropoffManual(false);
+            setDropoffCoords(coords ?? null);
           }
           setPickerTarget(null);
         }}
@@ -443,29 +531,16 @@ function DestinationStep({
 function AddressStep({
   pickupAddress,
   dropoffAddress,
-  pickupManual,
-  dropoffManual,
-  onPickupManualToggle,
-  onDropoffManualToggle,
-  onPickupChange,
-  onDropoffChange,
-  onLocatePickup,
-  onLocateDropoff,
+  onOpenPickup,
+  onOpenDropoff,
 }: {
   pickupAddress: string;
   dropoffAddress: string;
-  pickupManual: boolean;
-  dropoffManual: boolean;
-  onPickupManualToggle: () => void;
-  onDropoffManualToggle: () => void;
-  onPickupChange: (v: string) => void;
-  onDropoffChange: (v: string) => void;
-  onLocatePickup: () => void;
-  onLocateDropoff: () => void;
+  onOpenPickup: (mode: 'map' | 'manual') => void;
+  onOpenDropoff: (mode: 'map' | 'manual') => void;
 }) {
   return (
     <View>
-      {/* Adresse de départ */}
       <View style={styles.addressHeader}>
         <View style={styles.addressHeaderIcon}>
           <Ionicons name="storefront-outline" size={16} color={colors.primary} />
@@ -473,40 +548,19 @@ function AddressStep({
         <Text style={styles.addressTitle}>Adresse de départ</Text>
       </View>
 
-      {!pickupManual ? (
-        <>
-          <Pressable style={styles.addressRow} onPress={onLocatePickup}>
-            <View style={[styles.addressRowIcon, { backgroundColor: colors.primaryLight }]}>
-              <Ionicons name="navigate" size={18} color={colors.primary} />
-            </View>
-            <View style={styles.addressRowBody}>
-              <Text style={styles.addressRowLabel}>Trouver une adresse sur la carte</Text>
-              <Text style={styles.addressRowValue}>{pickupAddress || 'Brazzaville'}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-          </Pressable>
+      <Pressable style={styles.addressRow} onPress={() => onOpenPickup('map')}>
+        <View style={[styles.addressRowIcon, { backgroundColor: colors.primaryLight }]}>
+          <Ionicons name="map-outline" size={18} color={colors.primary} />
+        </View>
+        <View style={styles.addressRowBody}>
+          <Text style={styles.addressRowLabel}>Ajouter l'adresse de départ</Text>
+          <Text style={styles.addressRowValue}>
+            {pickupAddress || 'Choisir sur la carte ou saisir manuellement'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+      </Pressable>
 
-          <Pressable style={styles.addressRow} onPress={onPickupManualToggle}>
-            <View style={[styles.addressRowIcon, { backgroundColor: colors.secondaryLight }]}>
-              <Ionicons name="create-outline" size={18} color={colors.secondary} />
-            </View>
-            <View style={styles.addressRowBody}>
-              <Text style={styles.addressRowLabel}>Saisir une adresse</Text>
-              <Text style={styles.addressRowValue}>Taper l'adresse manuellement</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-          </Pressable>
-        </>
-      ) : (
-        <Field
-          icon="navigate-outline"
-          placeholder="Ex. Rue Mpila, Moungali"
-          value={pickupAddress}
-          onChangeText={onPickupChange}
-        />
-      )}
-
-      {/* Adresse du destinataire */}
       <View style={[styles.addressHeader, styles.addressHeaderGap]}>
         <View style={[styles.addressHeaderIcon, { backgroundColor: colors.secondaryLight }]}>
           <Ionicons name="flag-outline" size={16} color={colors.secondary} />
@@ -514,38 +568,25 @@ function AddressStep({
         <Text style={styles.addressTitle}>Adresse du destinataire</Text>
       </View>
 
-      {!dropoffManual ? (
-        <>
-          <Pressable style={styles.addressRow} onPress={onLocateDropoff}>
-            <View style={[styles.addressRowIcon, { backgroundColor: colors.secondaryLight }]}>
-              <Ionicons name="navigate" size={18} color={colors.secondary} />
-            </View>
-            <View style={styles.addressRowBody}>
-              <Text style={styles.addressRowLabel}>Trouver une adresse sur la carte</Text>
-              <Text style={styles.addressRowValue}>{dropoffAddress || 'Brazzaville'}</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-          </Pressable>
+      <Pressable style={styles.addressRow} onPress={() => onOpenDropoff('map')}>
+        <View style={[styles.addressRowIcon, { backgroundColor: colors.secondaryLight }]}>
+          <Ionicons name="map-outline" size={18} color={colors.secondary} />
+        </View>
+        <View style={styles.addressRowBody}>
+          <Text style={styles.addressRowLabel}>Ajouter l'adresse de livraison</Text>
+          <Text style={styles.addressRowValue}>
+            {dropoffAddress || 'Choisir sur la carte ou saisir manuellement'}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+      </Pressable>
 
-          <Pressable style={styles.addressRow} onPress={onDropoffManualToggle}>
-            <View style={[styles.addressRowIcon, { backgroundColor: '#EEF2FF' }]}>
-              <Ionicons name="create-outline" size={18} color="#4F46E5" />
-            </View>
-            <View style={styles.addressRowBody}>
-              <Text style={styles.addressRowLabel}>Saisir une adresse</Text>
-              <Text style={styles.addressRowValue}>Taper l'adresse manuellement</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-          </Pressable>
-        </>
-      ) : (
-        <Field
-          icon="location-outline"
-          placeholder="Ex. Avenue Matsoua, Bacongo"
-          value={dropoffAddress}
-          onChangeText={onDropoffChange}
-        />
-      )}
+      <View style={styles.infoBanner}>
+        <Ionicons name="information-circle" size={16} color={colors.info} />
+        <Text style={styles.infoText}>
+          Dans le sélecteur, basculez entre la carte et la saisie manuelle comme pour une commande restaurant.
+        </Text>
+      </View>
     </View>
   );
 }
@@ -720,8 +761,10 @@ function SuccessView({
         <View style={styles.successIcon}>
           <Ionicons name="checkmark" size={40} color="#fff" />
         </View>
-        <Text style={styles.successTitle}>Commande reçue</Text>
-        <Text style={styles.successSubtitle}>Vous serez contacté par nos équipes d'ici peu.</Text>
+        <Text style={styles.successTitle}>Demande en cours de traitement</Text>
+        <Text style={styles.successSubtitle}>
+          Votre expédition a bien été enregistrée. Un admin validera la demande et assignera un livreur.
+        </Text>
       </LinearGradient>
 
       {/* Expéditeur */}
@@ -772,7 +815,7 @@ function SuccessView({
       <View style={styles.successInfo}>
         <Ionicons name="call-outline" size={18} color={colors.primary} />
         <Text style={styles.successInfoText}>
-          Nos équipes vous contacteront rapidement pour organiser la prise en charge du colis.
+          Suivez votre colis depuis Profil → Mes colis une fois le livreur assigné.
         </Text>
       </View>
 
@@ -815,12 +858,11 @@ function Field({
       {label ? <Text style={styles.fieldLabel}>{label}</Text> : null}
       <View style={[styles.fieldWrap, multiline && styles.fieldWrapMultiline]}>
         <Ionicons name={icon} size={18} color={colors.textMuted} />
-        <TextInput
+        <AppTextInput
           style={[styles.fieldInput, multiline && styles.fieldInputMultiline]}
           value={value}
           onChangeText={onChangeText}
           placeholder={placeholder}
-          placeholderTextColor={colors.textMuted}
           multiline={multiline}
           keyboardType={keyboardType}
         />
@@ -831,7 +873,8 @@ function Field({
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { paddingBottom: TAB_BAR_OFFSET + 32 },
+  scroll: { flex: 1 },
+  content: { paddingBottom: TAB_BAR_OFFSET + 120 },
 
   // Hero
   hero: {
@@ -880,6 +923,22 @@ const styles = StyleSheet.create({
   },
 
   stepBody: { padding: spacing.lg },
+
+  authBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.primaryLight,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  authBannerText: {
+    flex: 1,
+    fontSize: 13,
+    fontFamily: fonts.bodyBold,
+    color: colors.primary,
+  },
 
   // Position
   positionCard: {
@@ -1195,6 +1254,30 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   nextBtnDisabled: { opacity: 0.45 },
+  step4Actions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  backBtnInline: {
+    width: 48,
+    height: 48,
+    borderRadius: radius.md,
+    backgroundColor: colors.background,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  submitError: {
+    color: colors.danger,
+    fontFamily: fonts.bodyBold,
+    fontSize: 13,
+    textAlign: 'center',
+    marginTop: spacing.md,
+  },
   nextBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1216,6 +1299,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingTop: 48,
     paddingBottom: spacing.xl,
+    paddingHorizontal: spacing.lg,
     borderBottomLeftRadius: radius.xl,
     borderBottomRightRadius: radius.xl,
   },
@@ -1233,12 +1317,18 @@ const styles = StyleSheet.create({
     fontFamily: fonts.titleBold,
     fontSize: 20,
     marginTop: spacing.md,
+    textAlign: 'center',
+    width: '100%',
   },
   successSubtitle: {
     color: 'rgba(255,255,255,0.72)',
     fontFamily: fonts.bodyMedium,
     fontSize: 13,
-    marginTop: 4,
+    marginTop: spacing.sm,
+    textAlign: 'center',
+    lineHeight: 20,
+    width: '100%',
+    paddingHorizontal: spacing.sm,
   },
   successCard: {
     backgroundColor: colors.surface,

@@ -1,0 +1,35 @@
+query MyFavorites {
+  myFavorites {
+    id
+    targetId
+    kind
+    name
+    imageUrl
+    price
+    seller
+    cuisineType
+    rating
+    city
+    createdAt
+  }
+}
+
+mutation ToggleFavorite($input: ToggleFavoriteInput!) {
+  toggleFavorite(input: $input) {
+    id
+    targetId
+    kind
+    name
+    imageUrl
+    price
+    seller
+    cuisineType
+    rating
+    city
+    createdAt
+  }
+}
+
+mutation RemoveFavorite($targetId: String!, $kind: FavoriteKind!) {
+  removeFavorite(targetId: $targetId, kind: $kind)
+}

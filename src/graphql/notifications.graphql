@@ -1,0 +1,30 @@
+query MyNotifications($page: Int = 1, $limit: Int = 20) {
+  myNotifications(page: $page, limit: $limit) {
+    items {
+      id
+      type
+      title
+      message
+      readAt
+      createdAt
+    }
+    pageInfo {
+      totalItems
+    }
+  }
+}
+
+query UnreadNotificationsCount {
+  unreadNotificationsCount
+}
+
+mutation MarkNotificationAsRead($input: MarkNotificationReadInput!) {
+  markNotificationAsRead(input: $input) {
+    id
+    readAt
+  }
+}
+
+mutation MarkAllNotificationsAsRead {
+  markAllNotificationsAsRead
+}

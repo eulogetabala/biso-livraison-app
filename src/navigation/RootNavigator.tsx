@@ -18,8 +18,12 @@ import CategoriesScreen from '../screens/CategoriesScreen';
 import RestaurantsScreen from '../screens/RestaurantsScreen';
 import ProductsScreen from '../screens/ProductsScreen';
 import ParcelScreen from '../screens/ParcelScreen';
+import NotificationsScreen from '../screens/NotificationsScreen';
+import EditProfileScreen from '../screens/EditProfileScreen';
+import ForgotPasswordScreen from '../screens/ForgotPasswordScreen';
 import MainTabs from './MainTabs';
 import AppTabBar from '../components/AppTabBar';
+import SplashPlaceholder from '../components/SplashPlaceholder';
 import { colors } from '../theme';
 import { useAuth } from '../lib/auth';
 import type { RootStackParamList } from './types';
@@ -35,8 +39,7 @@ export default function RootNavigator({ navigationRef, routeName }: Props) {
   const { initializing } = useAuth();
 
   if (initializing) {
-    // Rendu minimal pendant la restauration de la session.
-    return null;
+    return <SplashPlaceholder />;
   }
 
   return (
@@ -66,9 +69,12 @@ export default function RootNavigator({ navigationRef, routeName }: Props) {
         <Stack.Screen name="Restaurants" component={RestaurantsScreen} />
         <Stack.Screen name="Products" component={ProductsScreen} />
         <Stack.Screen name="Parcel" component={ParcelScreen} />
+        <Stack.Screen name="Notifications" component={NotificationsScreen} />
         <Stack.Screen name="Drivers" component={DriversScreen} />
         <Stack.Screen name="DriverDetail" component={DriverDetailScreen} />
         <Stack.Screen name="NearbyMap" component={NearbyMapScreen} />
+        <Stack.Screen name="EditProfile" component={EditProfileScreen} />
+        <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
       </Stack.Navigator>
       <AppTabBar navigationRef={navigationRef} routeName={routeName} />
     </View>

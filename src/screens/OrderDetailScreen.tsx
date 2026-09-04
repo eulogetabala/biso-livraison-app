@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Animated,
+  Dimensions,
   Linking,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -11,17 +13,11 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useCancelOrderMutation, useOrderQuery } from '../graphql/operations';
+import { useCancelOrderMutation, useOrderQuery, useTrackDeliveryQuery, useTrackingByDeliveryQuery } from '../graphql/operations';
 import type { OrderStatus } from '../graphql/types';
-import { MOCK_MODE } from '../config/mock';
-import {
-  cancelMockOrder,
-  getMockDeliveryCoordinates,
-  getMockOrderById,
-  getMockRestaurantCoordinates,
-} from '../mocks/service';
+import { distanceKmBetween, restaurantCoords } from '../lib/geo-data';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
-import { Button, EmptyState, formatPrice, Spinner, StatusBadge } from '../components/ui';
+import { Button, EmptyState, formatDateTime, formatPrice, Spinner, StatusBadge } from '../components/ui';
 import FloatingBackButton from '../components/FloatingBackButton';
 import PhoneNumber from '../components/PhoneNumber';
 import DriverLiveMap from '../components/DriverLiveMap';
@@ -41,44 +37,51 @@ const STEPS: { status: OrderStatus; label: string; icon: string }[] = [
 
 const CANCELLABLE: OrderStatus[] = ['PENDING', 'CONFIRMED', 'PREPARING'];
 
+const DELIVERY_STATUS_LABELS: Record<string, string> = {
+  ASSIGNED: 'Livreur assigné',
+  PICKED_UP: 'Commande récupérée',
+  IN_TRANSIT: 'En route vers vous',
+  DELIVERED: 'Livrée',
+};
+
 export default function OrderDetailScreen({ navigation, route }: Props) {
-  const { id } = route.params;
+  const { id, confirmation: isConfirmation = false } = route.params;
   const insets = useSafeAreaInsets();
   const { data, loading, error, refetch } = useOrderQuery({
     variables: { id },
+    pollInterval: isConfirmation ? undefined : 5000,
+  });
+  const order = data?.order;
+  const hasDriver = !!order?.delivery?.driver;
+  const trackable =
+    !isConfirmation &&
+    !!order &&
+    hasDriver &&
+    order.status !== 'DELIVERED' &&
+    order.status !== 'CANCELLED' &&
+    order.status !== 'PENDING';
+  const { data: trackData } = useTrackDeliveryQuery({
+    variables: { orderId: id },
+    skip: !trackable,
     pollInterval: 5000,
-    skip: MOCK_MODE,
   });
   const [cancelOrder, { loading: cancelling }] = useCancelOrderMutation();
   const [cancelError, setCancelError] = useState<string | null>(null);
-  const [mockRefreshTick, setMockRefreshTick] = useState(0);
-  const [mockProgress, setMockProgress] = useState(0.15);
+  const [mapExpanded, setMapExpanded] = useState(false);
+
+  const deliveryId = order?.delivery?.id;
+  const { data: trackingData } = useTrackingByDeliveryQuery({
+    variables: { deliveryId: deliveryId ?? '' },
+    skip: isConfirmation || !deliveryId,
+    pollInterval: 10000,
+  });
+  const trackingEvents = trackingData?.trackingByDelivery ?? [];
 
   const pulseScale = useRef(new Animated.Value(0.8)).current;
   const pulseOpacity = useRef(new Animated.Value(0.8)).current;
   const fadeIn = useRef(new Animated.Value(0)).current;
   const slideUp = useRef(new Animated.Value(30)).current;
   const totalScale = useRef(new Animated.Value(1)).current;
-
-  const order = MOCK_MODE ? getMockOrderById(String(id)) : data?.order;
-
-  useEffect(() => {
-    if (!MOCK_MODE) return;
-    if (!order) return;
-    if (order.status === 'DELIVERED' || order.status === 'CANCELLED') {
-      setMockProgress(1);
-      return;
-    }
-    const base = order.status === 'IN_TRANSIT' ? 0.35 : order.status === 'PREPARING' ? 0.12 : 0.05;
-    setMockProgress(base);
-    const interval = setInterval(() => {
-      setMockProgress((prev) => {
-        if (prev >= 0.97) return 0.97;
-        return prev + 0.03;
-      });
-    }, 4000);
-    return () => clearInterval(interval);
-  }, [order?.status, mockRefreshTick]);
 
   useEffect(() => {
     Animated.loop(
@@ -102,8 +105,19 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
     ]).start();
   }, [fadeIn, slideUp]);
 
-  if ((!MOCK_MODE && loading && !data)) return <Spinner />;
-  if ((!MOCK_MODE && error) || !order) {
+  const animateTotalBounce = useCallback(() => {
+    Animated.sequence([
+      Animated.timing(totalScale, { toValue: 1.08, duration: 150, useNativeDriver: true }),
+      Animated.spring(totalScale, { toValue: 1, tension: 200, friction: 10, useNativeDriver: true }),
+    ]).start();
+  }, [totalScale]);
+
+  useEffect(() => {
+    if (order?.grandTotal != null) animateTotalBounce();
+  }, [order?.grandTotal, animateTotalBounce]);
+
+  if (loading && !data) return <Spinner />;
+  if (error || !order) {
     return (
       <View style={styles.container}>
         <EmptyState title="Commande introuvable" subtitle="Cette commande n'existe pas ou a été supprimée." />
@@ -115,16 +129,22 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
     setCancelError(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      if (MOCK_MODE) {
-        await cancelMockOrder(id);
-        setMockRefreshTick((value) => value + 1);
+      await cancelOrder({ variables: { id } });
+      if (isConfirmation) {
+        goHome();
         return;
       }
-      await cancelOrder({ variables: { id } });
       refetch();
-    } catch (e) {
+    } catch {
       setCancelError('Impossible d\u2019annuler cette commande.');
     }
+  };
+
+  const goHome = () => {
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Main', params: { screen: 'Home' } }],
+    });
   };
 
   const handleCallDriver = (phone: string) => {
@@ -132,30 +152,129 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
     Linking.openURL(`tel:${phone}`);
   };
 
-  const animateTotalBounce = () => {
-    Animated.sequence([
-      Animated.timing(totalScale, { toValue: 1.08, duration: 150, useNativeDriver: true }),
-      Animated.spring(totalScale, { toValue: 1, tension: 200, friction: 10, useNativeDriver: true }),
-    ]).start();
-  };
-
-  useEffect(() => {
-    if (order) animateTotalBounce();
-  }, [order?.grandTotal, mockRefreshTick]);
-
   const currentStepIndex = STEPS.findIndex((s) => s.status === order.status);
 
-  const originCoords = order.restaurant?.id ? getMockRestaurantCoordinates(order.restaurant.id) : null;
-  const destinationCoords = getMockDeliveryCoordinates(order.id);
+  const originCoords = restaurantCoords(order.restaurant);
+  const destinationCoords =
+    order.deliveryLatitude != null && order.deliveryLongitude != null
+      ? { latitude: order.deliveryLatitude, longitude: order.deliveryLongitude }
+      : null;
+  const driverCoords = trackData?.trackDelivery
+    ? { latitude: trackData.trackDelivery.latitude, longitude: trackData.trackDelivery.longitude }
+    : null;
+  const deliveryStatus = order.delivery?.status;
+  const mapProgress =
+    deliveryStatus === 'IN_TRANSIT' || order.status === 'IN_TRANSIT'
+      ? 0.65
+      : deliveryStatus === 'PICKED_UP'
+        ? 0.45
+        : order.status === 'PREPARING'
+          ? 0.2
+          : order.status === 'CONFIRMED'
+            ? 0.08
+            : 0.4;
+  const etaMinutes =
+    driverCoords && destinationCoords
+      ? Math.max(5, Math.round((distanceKmBetween(driverCoords, destinationCoords) / 18) * 60))
+      : originCoords && destinationCoords
+        ? Math.max(8, Math.round((distanceKmBetween(originCoords, destinationCoords) / 18) * 60))
+        : undefined;
   const statusLabel =
     order.status === 'DELIVERED'
       ? 'Livrée'
-      : order.status === 'PREPARING'
-        ? 'En préparation'
-        : order.status === 'CONFIRMED' || order.status === 'PENDING'
-          ? 'Bientôt en route'
-          : 'En livraison';
-  const showLiveMap = MOCK_MODE && originCoords && destinationCoords;
+      : deliveryStatus
+        ? (DELIVERY_STATUS_LABELS[deliveryStatus] ?? 'En cours')
+        : order.status === 'PREPARING'
+          ? 'En préparation'
+          : order.status === 'CONFIRMED' || order.status === 'PENDING'
+            ? 'Bientôt en route'
+            : 'En livraison';
+  const showLiveMap =
+    trackable && !!originCoords && !!destinationCoords && (!!driverCoords || order.status !== 'PENDING');
+  const fullMapHeight = Dimensions.get('window').height - insets.top - insets.bottom - 48;
+
+  if (isConfirmation) {
+    return (
+      <View style={styles.container}>
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <View style={[styles.card, shadows.md]}>
+            <LinearGradient
+              colors={[colors.success, '#15803d']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.confirmationGradient}
+            >
+              <Ionicons name="checkmark-circle" size={48} color="#fff" style={styles.confirmationIcon} />
+              <Text style={styles.confirmationTitle}>Commande confirmée</Text>
+              <Text style={styles.confirmationSubtitle}>
+                Commande #{order.id.slice(0, 8).toUpperCase()}
+              </Text>
+              <Text style={styles.confirmationHint}>
+                Suivez votre commande depuis Profil → Mes commandes.
+              </Text>
+            </LinearGradient>
+          </View>
+
+          <View style={[styles.card, shadows.md]}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionIconWrap}>
+                <Ionicons name="receipt" size={16} color={colors.primary} />
+              </View>
+              <Text style={styles.sectionTitle}>Articles commandés</Text>
+            </View>
+
+            {order.items.map((item, index) => (
+              <View
+                key={item.menuItem?.id ?? index}
+                style={[styles.itemRow, index < order.items.length - 1 && styles.itemRowBorder]}
+              >
+                <View style={styles.itemBody}>
+                  <Text style={styles.itemName}>{item.menuItem?.name ?? 'Article'}</Text>
+                  <Text style={styles.itemQty}>×{item.quantity}</Text>
+                </View>
+                <Text style={styles.itemPrice}>{formatPrice(item.unitPrice * item.quantity)}</Text>
+              </View>
+            ))}
+
+            <View style={styles.summaryBlock}>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Sous-total</Text>
+                <Text style={styles.summaryValue}>{formatPrice(order.total)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={styles.summaryLabel}>Frais de livraison</Text>
+                <Text style={styles.summaryValue}>
+                  {order.deliveryFee === 0 ? 'Gratuit' : formatPrice(order.deliveryFee)}
+                </Text>
+              </View>
+              <View style={styles.summaryDivider} />
+              <View style={styles.summaryRow}>
+                <Text style={styles.totalLabel}>Total</Text>
+                <Text style={styles.totalValue}>{formatPrice(order.grandTotal)}</Text>
+              </View>
+            </View>
+          </View>
+
+          <Button title="Retour à l'accueil" onPress={goHome} style={styles.homeBtn} />
+
+          {CANCELLABLE.includes(order.status) ? (
+            <Button
+              title="Annuler la commande"
+              variant="danger"
+              onPress={handleCancel}
+              loading={cancelling}
+              style={styles.cancelBtn}
+            />
+          ) : null}
+          {cancelError ? <Text style={styles.errorText}>{cancelError}</Text> : null}
+        </ScrollView>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -261,13 +380,42 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
             <DriverLiveMap
               origin={originCoords}
               destination={destinationCoords}
+              driverPosition={driverCoords}
+              progress={mapProgress}
               driverName={order.delivery?.driver?.firstName ? `${order.delivery.driver.firstName} ${order.delivery.driver.lastName ?? ''}` : 'Livreur'}
-              progress={mockProgress}
               statusLabel={statusLabel}
-              etaMinutes={order.status === 'DELIVERED' ? undefined : 12}
+              etaMinutes={etaMinutes}
+              onExpand={() => setMapExpanded(true)}
             />
           </View>
         )}
+
+        {trackingEvents.length > 0 ? (
+          <View style={[styles.card, shadows.md]}>
+            <View style={styles.sectionHeader}>
+              <View style={styles.sectionIconWrap}>
+                <Ionicons name="list" size={16} color={colors.primary} />
+              </View>
+              <Text style={styles.sectionTitle}>Historique livraison</Text>
+            </View>
+            <View style={styles.trackingEvents}>
+              {[...trackingEvents].reverse().map((event, index) => (
+                <View key={event.id} style={styles.eventRow}>
+                  <View style={styles.eventIndicatorCol}>
+                    <View style={[styles.eventDot, index === 0 && styles.eventDotCurrent]} />
+                    {index < trackingEvents.length - 1 ? <View style={styles.eventLine} /> : null}
+                  </View>
+                  <View style={styles.eventBody}>
+                    <Text style={[styles.eventMessage, index === 0 && styles.eventMessageCurrent]}>
+                      {event.message ?? DELIVERY_STATUS_LABELS[event.status] ?? event.status}
+                    </Text>
+                    <Text style={styles.eventTime}>{formatDateTime(event.createdAt)}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : null}
 
         {/* ── Driver Card ── */}
         {order.delivery?.driver && (
@@ -432,6 +580,30 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
       </Animated.View>
       </ScrollView>
       <FloatingBackButton navigation={navigation} />
+
+      <Modal visible={mapExpanded} animationType="slide" onRequestClose={() => setMapExpanded(false)}>
+        <View style={[styles.fullMapScreen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+          {showLiveMap ? (
+            <DriverLiveMap
+              origin={originCoords}
+              destination={destinationCoords}
+              driverPosition={driverCoords}
+              progress={mapProgress}
+              driverName={order.delivery?.driver?.firstName ? `${order.delivery.driver.firstName} ${order.delivery.driver.lastName ?? ''}` : 'Livreur'}
+              statusLabel={statusLabel}
+              etaMinutes={etaMinutes}
+              mapHeight={fullMapHeight}
+            />
+          ) : null}
+          <TouchableOpacity
+            style={[styles.closeMapBtn, { top: insets.top + 12 }]}
+            onPress={() => setMapExpanded(false)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="close" size={22} color="#fff" />
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -735,6 +907,39 @@ const styles = StyleSheet.create({
   },
 
   /* Cancel */
+  homeBtn: {
+    marginTop: spacing.sm,
+    height: 52,
+    borderRadius: radius.sm,
+  },
+  confirmationGradient: {
+    borderRadius: radius.md,
+    padding: spacing.xl,
+    alignItems: 'center',
+  },
+  confirmationIcon: {
+    marginBottom: spacing.sm,
+  },
+  confirmationTitle: {
+    fontSize: 22,
+    fontFamily: fonts.titleBold,
+    color: '#fff',
+    textAlign: 'center',
+  },
+  confirmationSubtitle: {
+    fontSize: 14,
+    fontFamily: fonts.bodyMedium,
+    color: 'rgba(255,255,255,0.85)',
+    marginTop: 6,
+  },
+  confirmationHint: {
+    fontSize: 13,
+    fontFamily: fonts.bodyMedium,
+    color: 'rgba(255,255,255,0.75)',
+    marginTop: spacing.md,
+    textAlign: 'center',
+    lineHeight: 19,
+  },
   cancelBtn: {
     marginTop: spacing.sm,
     height: 52,
@@ -746,5 +951,75 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bodyBold,
     marginTop: spacing.md,
     textAlign: 'center',
+  },
+
+  trackingEvents: {
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.lg,
+  },
+  eventRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  eventIndicatorCol: {
+    width: 20,
+    alignItems: 'center',
+  },
+  eventDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.border,
+    marginTop: 4,
+  },
+  eventDotCurrent: {
+    backgroundColor: colors.primary,
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
+  eventLine: {
+    width: 2,
+    flex: 1,
+    minHeight: 28,
+    backgroundColor: colors.border,
+    marginVertical: 4,
+  },
+  eventBody: {
+    flex: 1,
+    marginLeft: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  eventMessage: {
+    fontSize: 13,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+  },
+  eventMessageCurrent: {
+    color: colors.secondary,
+    fontFamily: fonts.bodyBold,
+  },
+  eventTime: {
+    fontSize: 11,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    marginTop: 3,
+  },
+
+  fullMapScreen: {
+    flex: 1,
+    backgroundColor: colors.background,
+    padding: spacing.md,
+  },
+  closeMapBtn: {
+    position: 'absolute',
+    right: spacing.lg,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.secondary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadows.lg,
   },
 });

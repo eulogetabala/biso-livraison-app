@@ -133,6 +133,26 @@ export function distanceKmBetween(
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
+/** Coordonnées GPS d'un restaurant renvoyées par l'API. */
+export function restaurantCoords(
+  restaurant: { latitude?: number | null; longitude?: number | null } | null | undefined,
+): { latitude: number; longitude: number } | null {
+  if (restaurant?.latitude != null && restaurant?.longitude != null) {
+    return { latitude: restaurant.latitude, longitude: restaurant.longitude };
+  }
+  return null;
+}
+
+/** Distance utilisateur ↔ restaurant (km), ou null si coords manquantes. */
+export function restaurantDistanceKm(
+  userCoords: { latitude: number; longitude: number } | null,
+  restaurant: { latitude?: number | null; longitude?: number | null } | null | undefined,
+): number | null {
+  const coords = restaurantCoords(restaurant);
+  if (!userCoords || !coords) return null;
+  return distanceKmBetween(userCoords, coords);
+}
+
 /**
  * Retourne le quartier local le plus proche d'un point donné.
  * Permet de donner un nom de quartier même quand le reverse-geocoding

@@ -25,7 +25,7 @@ type Props = CompositeScreenProps<
 >;
 
 export default function CartScreen({ navigation }: Props) {
-  const { cart, count, subtotal, total, setQuantity, removeItem } = useCart();
+  const { cart, subtotal, setQuantity, removeItem } = useCart();
 
   const handleQty = (lineKey: string, quantity: number) => {
     Haptics.selectionAsync();
@@ -121,16 +121,12 @@ export default function CartScreen({ navigation }: Props) {
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Frais de livraison</Text>
-              {cart.deliveryFee === 0 ? (
-                <Text style={styles.freeText}>Gratuit</Text>
-              ) : (
-                <Text style={styles.summaryValue}>{formatPrice(cart.deliveryFee)}</Text>
-              )}
+              <Text style={styles.summaryLater}>Calculés à l'étape suivante</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.summaryRow}>
               <Text style={styles.summaryTotalLabel}>Total</Text>
-              <Text style={styles.summaryTotalValue}>{formatPrice(total)}</Text>
+              <Text style={styles.summaryTotalValue}>{formatPrice(subtotal)}</Text>
             </View>
 
             <Pressable style={styles.checkoutBtn} onPress={() => navigation.navigate('Checkout')}>
@@ -280,10 +276,11 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bodyBold,
     color: colors.secondary,
   },
-  freeText: {
-    fontSize: 13,
-    fontFamily: fonts.bodyBold,
-    color: colors.success,
+  summaryLater: {
+    fontSize: 12,
+    fontFamily: fonts.bodyMedium,
+    color: colors.textMuted,
+    fontStyle: 'italic',
   },
   divider: {
     height: 1,

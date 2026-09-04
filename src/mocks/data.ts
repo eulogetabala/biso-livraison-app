@@ -94,6 +94,7 @@ function menuItem(
     category,
     imageUrl: imageUrl ?? null,
     isAvailable: true,
+    kind: 'RESTAURANT_DISH',
     restaurantId,
     restaurant: null,
     createdAt: iso(-1000),
@@ -247,15 +248,33 @@ export const mockDrivers: MockDriver[] = [
   { id: 'd-3', firstName: 'Junior', lastName: 'Mboko', type: 'Interville', etaMinutes: 25, zone: 'Brazzaville → Pointe-Noire', rating: 4.7, available: true },
 ];
 
+export type MockParcelInfo = {
+  description: string | null;
+  weight: string | null;
+  senderAddress: string;
+  receiverName: string;
+  receiverPhone: string;
+  note: string;
+  destination: 'local' | 'intercity';
+  pickupCoords: { latitude: number; longitude: number } | null;
+  dropoffCoords: { latitude: number; longitude: number } | null;
+};
+
+export type MockOrderStatus = OrderStatus | 'PICKED_UP';
+
 export type MockOrder = {
   id: string;
-  status: OrderStatus;
+  status: MockOrderStatus;
   total: number;
   deliveryFee: number;
   grandTotal: number;
   deliveryAddress: string;
   deliveryCity: string;
   deliveryZipCode: string;
+  deliveryPhone?: string;
+  note?: string;
+  kind?: 'restaurant' | 'parcel';
+  parcel?: MockParcelInfo;
   createdAt: string;
   restaurant: {
     id: string;

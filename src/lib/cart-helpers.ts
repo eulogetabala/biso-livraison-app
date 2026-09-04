@@ -1,12 +1,11 @@
+import { MARKET_RESTAURANT_ID, MARKET_RESTAURANT_NAME } from '../config/seed-ids';
 import type { MenuItemModel } from '../graphql/types';
-import type { MockProduct } from '../mocks/data';
+import type { CatalogProduct } from './catalog';
 
-/** Identifiant "virtuel" du marché (produits hors restaurant) dans le panier. */
-export const MARKET_RESTAURANT_ID = 'market';
-export const MARKET_RESTAURANT_NAME = 'Biso Market';
+export { MARKET_RESTAURANT_ID, MARKET_RESTAURANT_NAME };
 
-/** Convertit un produit du marché en item de menu pour le panier. */
-export function menuItemFromProduct(product: MockProduct): MenuItemModel {
+/** @deprecated Utiliser CatalogProduct depuis catalog.ts */
+export function menuItemFromProduct(product: CatalogProduct): MenuItemModel {
   return {
     __typename: 'MenuItemModel',
     id: product.id,
@@ -16,7 +15,8 @@ export function menuItemFromProduct(product: MockProduct): MenuItemModel {
     category: 'MAIN_COURSE',
     imageUrl: product.imageUrl,
     isAvailable: true,
-    restaurantId: MARKET_RESTAURANT_ID,
+    kind: 'SIMPLE_PRODUCT',
+    restaurantId: null,
     restaurant: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),

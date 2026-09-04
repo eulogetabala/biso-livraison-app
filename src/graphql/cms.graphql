@@ -1,0 +1,49 @@
+query ActiveHomeBanners {
+  activeHomeBanners {
+    id
+    title
+    subtitle
+    imageUrl
+    ctaLabel
+    linkType
+    linkValue
+    sortOrder
+    isActive
+  }
+}
+
+query ActiveMarketCategories {
+  activeMarketCategories {
+    id
+    label
+    subtitle
+    imageUrl
+    icon
+    iconLib
+    tint
+    iconColor
+    sortOrder
+    isActive
+  }
+}
+
+query ActiveCuisineTypes {
+  activeCuisineTypes {
+    id
+    value
+    label
+    emoji
+    sortOrder
+    isActive
+  }
+}
+
+query MarketRestaurant {
+  marketRestaurant {
+    id
+    name
+    deliveryFee
+    estimatedDeliveryTime
+    isActive
+  }
+}

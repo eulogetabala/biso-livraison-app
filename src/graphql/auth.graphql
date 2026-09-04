@@ -22,7 +22,20 @@ mutation Register($input: CreateUserInput!) {
     firstName
     lastName
     role
+    phone
   }
+}
+
+mutation RequestOtp($input: RequestOtpInput!) {
+  requestOtp(input: $input) {
+    phone
+    expiresIn
+    devCode
+  }
+}
+
+mutation VerifyOtp($input: VerifyOtpInput!) {
+  verifyOtp(input: $input)
 }
 
 mutation UpdateProfile($input: UpdateProfileInput!) {
@@ -32,6 +45,20 @@ mutation UpdateProfile($input: UpdateProfileInput!) {
     lastName
     phone
     avatarUrl
+    role
+    email
+    createdAt
+    updatedAt
+  }
+}
+
+mutation ResetPassword($input: ResetPasswordInput!) {
+  resetPassword(input: $input)
+}
+
+mutation DeleteMyAccount {
+  deleteMyAccount {
+    id
   }
 }
 

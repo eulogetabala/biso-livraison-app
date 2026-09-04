@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, TextInput, StyleSheet } from 'react-native';
-import { colors, radius, fonts } from '../theme';
+import { colors, radius, fonts, inputTheme } from '../theme';
 
 type Props = {
   value: string;
@@ -13,6 +13,8 @@ type Props = {
 };
 
 export default function PhoneInput({ value, onChange, placeholder, onFocus, onBlur }: Props) {
+  const hint = placeholder?.trim();
+
   return (
     <View style={styles.row}>
       <View style={styles.countryPill}>
@@ -20,16 +22,26 @@ export default function PhoneInput({ value, onChange, placeholder, onFocus, onBl
         <Text style={styles.code}>+242</Text>
       </View>
       <View style={styles.separator} />
-      <TextInput
-        style={styles.input}
-        value={value}
-        onChangeText={onChange}
-        placeholder={placeholder ?? '06 XXX XX XX'}
-        placeholderTextColor={colors.textMuted}
-        keyboardType="phone-pad"
-        onFocus={onFocus}
-        onBlur={onBlur}
-      />
+      <View style={styles.inputWrap}>
+        {!value && hint ? (
+          <View pointerEvents="none" style={styles.placeholderOverlay}>
+            <Text numberOfLines={1} style={styles.placeholder}>
+              {hint}
+            </Text>
+          </View>
+        ) : null}
+        <TextInput
+          style={[styles.input, value.length > 0 && styles.inputFilled]}
+          value={value}
+          onChangeText={onChange}
+          placeholder=""
+          placeholderTextColor="transparent"
+          keyboardType="phone-pad"
+          textAlignVertical="center"
+          onFocus={onFocus}
+          onBlur={onBlur}
+        />
+      </View>
     </View>
   );
 }
@@ -38,6 +50,7 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     alignItems: 'center',
+    alignSelf: 'stretch',
     flex: 1,
   },
   countryPill: {
@@ -64,6 +77,24 @@ const styles = StyleSheet.create({
     backgroundColor: colors.border,
     marginHorizontal: 10,
   },
+  inputWrap: {
+    flex: 1,
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  placeholderOverlay: {
+    ...StyleSheet.absoluteFill,
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  placeholder: {
+    color: inputTheme.placeholderColor,
+    fontSize: inputTheme.placeholderFontSize,
+    fontFamily: fonts.bodyMedium,
+    letterSpacing: 0,
+    lineHeight: inputTheme.placeholderFontSize + 2,
+  },
   input: {
     flex: 1,
     height: '100%',
@@ -72,6 +103,9 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 16,
     paddingVertical: 0,
-    letterSpacing: 0.8,
+    letterSpacing: 0,
+  },
+  inputFilled: {
+    letterSpacing: 0.4,
   },
 });

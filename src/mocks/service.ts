@@ -1,9 +1,9 @@
 import type { CreateOrderInput, MenuItemModel, RestaurantModel, UserModel } from '../graphql/types';
-import { computeDeliveryFee, mockRestaurantDistanceKm } from '../lib/pricing';
-import { initialMockOrders, mockDrivers, mockMenuItems, mockProducts, mockRestaurants, mockUser, type MockOrder } from './data';
+import { initialMockOrders, mockDrivers, mockMenuItems, mockProducts, mockRestaurants, mockUser, type MockOrder, type MockParcelInfo } from './data';
 
 let currentUser: UserModel = { ...mockUser };
 let orders: MockOrder[] = [...initialMockOrders];
+let mockPassword = 'secret123';
 
 const pendingOtps = new Map<string, { code: string; expiresAt: number }>();
 
@@ -75,10 +75,52 @@ export async function mockRegister(input: {
     email: `${input.phone.replace(/\s+/g, '')}@phone.biso`,
     updatedAt: new Date().toISOString(),
   };
+  mockPassword = input.password;
   return {
     accessToken: 'mock-access-token',
     user: currentUser,
   };
+}
+
+/** Met à jour les informations du profil de l'utilisateur connecté. */
+export async function mockUpdateProfile(input: {
+  firstName: string;
+  lastName: string;
+  phone: string;
+}) {
+  await wait();
+  if (!input.firstName.trim() || !input.lastName.trim() || !input.phone.trim()) {
+    throw new Error('Veuillez remplir tous les champs.');
+  }
+  currentUser = {
+    ...currentUser,
+    firstName: input.firstName.trim(),
+    lastName: input.lastName.trim(),
+    phone: input.phone.startsWith('+') ? input.phone : `+242${input.phone.replace(/\s+/g, '')}`,
+    email: `${input.phone.replace(/\s+/g, '')}@phone.biso`,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...currentUser };
+}
+
+/** Réinitialise le mot de passe après vérification OTP. */
+export async function mockResetPassword(phone: string, newPassword: string) {
+  await wait(180);
+  if (newPassword.length < 6) {
+    throw new Error('Le mot de passe doit contenir au moins 6 caractères.');
+  }
+  mockPassword = newPassword;
+  console.log(`[MOCK] Mot de passe réinitialisé pour ${phone}`);
+  return true;
+}
+
+/** Supprime le compte de l'utilisateur connecté (mock). */
+export async function mockDeleteAccount() {
+  await wait(300);
+  currentUser = { ...mockUser };
+  mockPassword = 'secret123';
+  console.log('[MOCK] Compte supprimé');
+  return true;
 }
 
 export async function getMockRestaurants(filters?: { query?: string; cuisineType?: string }) {
@@ -117,8 +159,11 @@ export async function getMockDriverById(id: string) {
 export function getMockRestaurantCoordinates(id: string) {
   const coordinates: Record<string, { latitude: number; longitude: number }> = {
     'rest-1': { latitude: -4.2634, longitude: 15.2429 },
-    'rest-2': { latitude: -4.2695, longitude: 15.2712 },
+    'rest-2': { latitude: -4.7692, longitude: 11.8664 },
     'rest-3': { latitude: -4.2511, longitude: 15.2558 },
+    'rest-4': { latitude: -4.2796, longitude: 15.2905 },
+    'rest-5': { latitude: -4.2402, longitude: 15.2213 },
+    market: { latitude: -4.2631, longitude: 15.2456 },
   };
   return coordinates[id];
 }
@@ -151,7 +196,10 @@ export function getMockOrderById(id: string) {
   return orders.find((order) => order.id === id);
 }
 
-export async function createMockOrder(input: CreateOrderInput) {
+export async function createMockOrder(
+  input: CreateOrderInput,
+  options?: { deliveryFee?: number; deliveryPhone?: string; note?: string },
+) {
   await wait(300);
   const restaurant = getMockRestaurantById(String(input.restaurantId));
   const fallbackRestaurant = {
@@ -176,7 +224,8 @@ export async function createMockOrder(input: CreateOrderInput) {
   });
 
   const total = items.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0);
-  const deliveryFee = computeDeliveryFee(mockRestaurantDistanceKm(String(source.id)));
+  const deliveryFee =
+    options?.deliveryFee ?? 1000;
   const created: MockOrder = {
     id: `order-${Date.now()}`,
     status: 'PENDING',
@@ -186,6 +235,8 @@ export async function createMockOrder(input: CreateOrderInput) {
     deliveryAddress: input.deliveryAddress,
     deliveryCity: input.deliveryCity,
     deliveryZipCode: input.deliveryZipCode,
+    deliveryPhone: options?.deliveryPhone,
+    note: options?.note,
     createdAt: new Date().toISOString(),
     restaurant: {
       id: source.id,
@@ -206,6 +257,62 @@ export async function createMockOrder(input: CreateOrderInput) {
     },
   };
 
+  orders = [created, ...orders];
+  return created;
+}
+
+/** Crée une commande de colis (mock) pour qu'elle apparaisse dans "Mes commandes". */
+export async function createMockParcel(input: {
+  receiverName: string;
+  receiverPhone: string;
+  description: string | null;
+  weight: string | null;
+  senderAddress: string;
+  dropoffAddress: string;
+  note: string;
+  destination: 'local' | 'intercity';
+  price: number;
+  pickupCoords: { latitude: number; longitude: number } | null;
+  dropoffCoords: { latitude: number; longitude: number } | null;
+}) {
+  await wait(300);
+  const parcelInfo: MockParcelInfo = {
+    description: input.description,
+    weight: input.weight,
+    senderAddress: input.senderAddress,
+    receiverName: input.receiverName,
+    receiverPhone: input.receiverPhone,
+    note: input.note,
+    destination: input.destination,
+    pickupCoords: input.pickupCoords,
+    dropoffCoords: input.dropoffCoords,
+  };
+  const created: MockOrder = {
+    id: `parcel-${Date.now()}`,
+    kind: 'parcel',
+    status: 'PENDING',
+    total: 0,
+    deliveryFee: input.price,
+    grandTotal: input.price,
+    deliveryAddress: input.dropoffAddress,
+    deliveryCity: input.destination === 'local' ? 'Brazzaville' : 'Pointe-Noire',
+    deliveryZipCode: '0000',
+    deliveryPhone: input.receiverPhone,
+    createdAt: new Date().toISOString(),
+    restaurant: null,
+    items: [],
+    payment: {
+      method: 'CASH_ON_DELIVERY',
+      status: 'PENDING',
+      amount: input.price,
+    },
+    delivery: {
+      id: `delivery-${Date.now()}`,
+      status: 'ASSIGNED',
+      driver: { id: 'driver-mock', firstName: 'Biso', lastName: 'Express', phone: '+242066999888' },
+    },
+    parcel: parcelInfo,
+  };
   orders = [created, ...orders];
   return created;
 }

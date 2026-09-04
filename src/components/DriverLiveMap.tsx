@@ -16,39 +16,45 @@ type Props = {
   destination: LiveMapPoint | null;
   /** Nom du livreur (affiché dans l'encart). */
   driverName?: string | null;
-  /** Progression simulée du livreur, entre 0 et 1. */
+  /** Position GPS actuelle du livreur (prioritaire sur progress). */
+  driverPosition?: LiveMapPoint | null;
+  /** Progression simulée du livreur, entre 0 et 1 (repli si driverPosition absent). */
   progress?: number;
   /** Statut affiché (ex. "En livraison"). */
   statusLabel?: string;
   /** Temps estimé restant en minutes. */
   etaMinutes?: number;
+  /** Hauteur de la carte (défaut 220). */
+  mapHeight?: number;
   onExpand?: () => void;
 };
 
 /**
- * Carte de suivi en temps réel : affiche le restaurant, la destination
- * et le livreur en mouvement le long du trajet (position simulée en mock).
+ * Carte de suivi en temps réel : restaurant, destination et position du livreur.
  */
 export default function DriverLiveMap({
   origin,
   destination,
   driverName,
+  driverPosition,
   progress = 0.4,
   statusLabel = 'En livraison',
   etaMinutes,
+  mapHeight = 220,
   onExpand,
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const driverPosition = useMemo(() => {
+  const resolvedDriverPosition = useMemo(() => {
+    if (driverPosition) return driverPosition;
     if (!origin || !destination) return null;
     const p = Math.max(0, Math.min(1, progress));
     return {
       latitude: origin.latitude + (destination.latitude - origin.latitude) * p,
       longitude: origin.longitude + (destination.longitude - origin.longitude) * p,
     };
-  }, [origin, destination, progress]);
+  }, [driverPosition, origin, destination, progress]);
 
   const region = useMemo(() => {
     const a = origin ?? destination;
@@ -63,12 +69,12 @@ export default function DriverLiveMap({
   }, [origin, destination]);
 
   useEffect(() => {
-    if (loaded && driverPosition && mapRef.current) {
-      mapRef.current.animateCamera({ center: driverPosition }, { duration: 800 });
+    if (loaded && resolvedDriverPosition && mapRef.current) {
+      mapRef.current.animateCamera({ center: resolvedDriverPosition }, { duration: 800 });
     }
-  }, [driverPosition, loaded]);
+  }, [resolvedDriverPosition, loaded]);
 
-  if (!origin || !destination || !driverPosition) {
+  if (!origin || !destination || !resolvedDriverPosition) {
     return null;
   }
 
@@ -76,7 +82,7 @@ export default function DriverLiveMap({
     <View style={styles.wrap}>
       <MapView
         ref={mapRef}
-        style={styles.map}
+        style={[styles.map, { height: mapHeight }]}
         region={region}
         onMapReady={() => setLoaded(true)}
         pitchEnabled={false}
@@ -91,7 +97,7 @@ export default function DriverLiveMap({
         </Marker>
 
         {/* Livreur en mouvement */}
-        <Marker coordinate={driverPosition} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges>
+        <Marker coordinate={resolvedDriverPosition} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges>
           <View style={styles.driverPulse}>
             <View style={[styles.marker, styles.markerDriver]}>
               <Ionicons name="bicycle" size={16} color="#fff" />
@@ -107,14 +113,14 @@ export default function DriverLiveMap({
         </Marker>
 
         <Polyline
-          coordinates={[origin, driverPosition]}
+          coordinates={[origin, resolvedDriverPosition]}
           strokeColor={colors.primary}
           strokeWidth={4}
           lineDashPattern={[1, 6]}
           lineCap="round"
         />
         <Polyline
-          coordinates={[driverPosition, destination]}
+          coordinates={[resolvedDriverPosition, destination]}
           strokeColor={colors.border}
           strokeWidth={4}
           lineDashPattern={[1, 6]}

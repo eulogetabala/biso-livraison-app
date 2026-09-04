@@ -1,0 +1,10 @@
+query TrackingByDelivery($deliveryId: ID!) {
+  trackingByDelivery(deliveryId: $deliveryId) {
+    id
+    status
+    message
+    latitude
+    longitude
+    createdAt
+  }
+}

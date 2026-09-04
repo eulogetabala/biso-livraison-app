@@ -8,6 +8,8 @@ mutation CreateOrder($input: CreateOrderInput!) {
     deliveryAddress
     deliveryCity
     deliveryZipCode
+    deliveryLatitude
+    deliveryLongitude
     createdAt
     payment {
       method
@@ -81,12 +83,16 @@ query Order($id: ID!) {
     deliveryAddress
     deliveryCity
     deliveryZipCode
+    deliveryLatitude
+    deliveryLongitude
     createdAt
     restaurant {
       id
       name
       imageUrl
       phone
+      latitude
+      longitude
     }
     items {
       quantity

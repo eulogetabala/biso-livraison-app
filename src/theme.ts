@@ -19,6 +19,12 @@ export const colors = {
   glassBorder: 'rgba(255,255,255,0.3)',
 };
 
+/** Style des placeholders de champs texte (plus discrets que le texte saisi). */
+export const inputTheme = {
+  placeholderColor: 'rgba(98, 117, 143, 0.38)',
+  placeholderFontSize: 14,
+};
+
 export const spacing = {
   xs: 4,
   sm: 8,

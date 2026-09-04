@@ -5,14 +5,15 @@ import {
   Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import MapView, { Marker } from 'react-native-maps';
+import { AppTextInput } from './AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
+import { requestLocationPermission, promptLocationDenied } from '../lib/permissions';
 import {
   BRAZZAVILLE_CENTER,
   POINTE_NOIRE_CENTER,
@@ -22,21 +23,25 @@ import {
   type GeoPlace,
 } from '../lib/geo-data';
 
-type PickerTarget = 'pickup' | 'dropoff';
+type PickerTarget = 'pickup' | 'dropoff' | 'delivery';
+type PickerMode = 'map' | 'manual';
 
 type Props = {
   visible: boolean;
   target: PickerTarget;
   initialAddress?: string;
+  /** Mode d'ouverture : carte ou saisie manuelle. */
+  initialMode?: PickerMode;
   /** Ville par défaut où centrer la carte (départ/arrivée). */
   defaultCity: 'brazzaville' | 'pointe-noire';
   onClose: () => void;
-  onConfirm: (address: string) => void;
+  onConfirm: (address: string, coords?: { latitude: number; longitude: number }) => void;
 };
 
 const TITLES: Record<PickerTarget, string> = {
   pickup: 'Adresse de départ',
   dropoff: 'Adresse du destinataire',
+  delivery: 'Adresse de livraison',
 };
 
 type Suggestion = {
@@ -53,6 +58,28 @@ const CITY_NAME: Record<'brazzaville' | 'pointe-noire', string> = {
 };
 
 /**
+ * Détecte un nom de commerce / point d'intérêt (ex. "Biso Market") pour ne pas
+ * l'utiliser comme adresse. On ignore ces noms au profit des rues/quartiers.
+ */
+const POI_NAME_PATTERN =
+  /\b(market|march[eé]|shop|boutique|store|restaurant|supermarche|supermarch[eé]|e?picerie|pharmacie|boulangerie|salon|coiffure|hotel|bar|caf[eé]|bracerie)\b/i;
+
+function isPoiName(name: string): boolean {
+  const trimmed = name.trim();
+  // Un nom de rue classique (rue, avenue, boulevard…) ou avec un numéro
+  // est une vraie adresse, pas un POI.
+  if (
+    /(^|\s)(rue|avenue|av\.|bd|boulevard|impasse|chemin|route|all[eé]e|place|pont|quai|cours|giratoire|carrefour)\b/i.test(
+      trimmed,
+    ) ||
+    /\d/.test(trimmed)
+  ) {
+    return false;
+  }
+  return POI_NAME_PATTERN.test(trimmed);
+}
+
+/**
  * Sélecteur d'adresse dynamique sur une carte :
  * recherche par géocodage, pin central déplaçable, adresse déduite par
  * reverse-geocoding et confirmation.
@@ -61,6 +88,7 @@ export default function AddressPickerModal({
   visible,
   target,
   initialAddress,
+  initialMode = 'map',
   defaultCity,
   onClose,
   onConfirm,
@@ -69,6 +97,7 @@ export default function AddressPickerModal({
   const mapRef = useRef<MapView>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  const [mode, setMode] = useState<PickerMode>(initialMode);
   const [center, setCenter] = useState(BRAZZAVILLE_CENTER);
   const [address, setAddress] = useState('');
   const [resolving, setResolving] = useState(false);
@@ -83,6 +112,7 @@ export default function AddressPickerModal({
   // Initialise la carte à l'ouverture.
   useEffect(() => {
     if (!visible) return;
+    setMode(initialMode);
     setQuery('');
     setSuggestions([]);
     setShowSuggestions(false);
@@ -99,8 +129,12 @@ export default function AddressPickerModal({
   }, [visible, defaultCity]);
 
   const formatPlace = (place: Location.LocationGeocodedAddress): string => {
+    // Certains noms renvoyés par le géocodeur système sont des commerces/POI
+    // (ex. "Biso Market") et non une vraie adresse : on les ignore pour ne pas
+    // proposer le nom d'un magasin comme adresse de livraison.
+    const name = place.name && !isPoiName(place.name) ? place.name : undefined;
     const parts = [
-      place.name,
+      name,
       place.street,
       place.district,
       place.subregion,
@@ -109,6 +143,13 @@ export default function AddressPickerModal({
       place.country,
     ].filter((p): p is string => !!p && p.trim().length > 0);
     const uniq = [...new Set(parts)];
+    // Si on ne garde qu'une ville/région/pays (aucune rue ni quartier),
+    // l'adresse n'est pas exploitable : on renvoie '' pour retomber sur le
+    // quartier local le plus proche.
+    const hasStreetInfo = !!place.street || !!place.district || !!place.subregion;
+    if (!hasStreetInfo && (!name || uniq.length <= 2)) {
+      return '';
+    }
     return uniq.join(', ');
   };
 
@@ -133,8 +174,11 @@ export default function AddressPickerModal({
         defaultCity === 'pointe-noire'
           ? /brazzaville/i.test(resolved)
           : /pointe\s?-?\s?noire/i.test(resolved);
+      // Une adresse réduite à une simple ville (sans rue ni quartier) n'est pas
+      // exploitable : on préfère le quartier local le plus proche.
+      const tooGeneric = !/,\s*/.test(resolved);
       setAddress(
-        (resolved && resolved.length > 4 && !wrongCity ? resolved : fallback) ||
+        (resolved && resolved.length > 4 && !wrongCity && !tooGeneric ? resolved : fallback) ||
           `${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`,
       );
       setResolving(false);
@@ -264,9 +308,13 @@ export default function AddressPickerModal({
 
   const locateMe = async () => {
     setLocating(true);
+    const permission = await requestLocationPermission();
+    if (permission !== 'granted') {
+      setLocating(false);
+      promptLocationDenied(permission, locateMe);
+      return;
+    }
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return;
       const position = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Balanced,
       });
@@ -278,7 +326,7 @@ export default function AddressPickerModal({
       );
       await reverseGeocode(c);
     } catch {
-      // permission refusée ou géolocalisation indisponible
+      // géolocalisation indisponible
     } finally {
       setLocating(false);
     }
@@ -286,7 +334,21 @@ export default function AddressPickerModal({
 
   const confirm = () => {
     if (address.trim().length > 0) {
-      onConfirm(address.trim());
+      if (mode === 'manual') {
+        onConfirm(address.trim());
+      } else {
+        onConfirm(address.trim(), { latitude: center.latitude, longitude: center.longitude });
+      }
+    }
+  };
+
+  const switchMode = (m: PickerMode) => {
+    setMode(m);
+    setShowSuggestions(false);
+    setSuggestions([]);
+    // En repassant sur la carte, on tente de centrer sur l'adresse saisie.
+    if (m === 'map' && address.trim()) {
+      geocodeAndCenter(address.trim());
     }
   };
 
@@ -330,31 +392,89 @@ export default function AddressPickerModal({
           <View style={styles.closeBtn} />
         </View>
 
-        {/* Recherche */}
-        <View style={[styles.searchBar, { marginTop: insets.top + 60 }]}>
-          <Ionicons name="search" size={18} color={colors.textMuted} />
-          <TextInput
-            style={styles.searchInput}
-            value={query}
-            onChangeText={handleQueryChange}
-            onFocus={() => setShowSuggestions(true)}
-            placeholder="Rechercher une adresse…"
-            placeholderTextColor={colors.textMuted}
-            autoCapitalize="words"
-            returnKeyType="search"
-          />
-          {searching ? (
-            <ActivityIndicator size="small" color={colors.primary} />
-          ) : query.length > 0 ? (
-            <Pressable onPress={() => handleQueryChange('')} hitSlop={8}>
-              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-            </Pressable>
-          ) : null}
+        {/* Recherche (mode carte) */}
+        {mode === 'map' ? (
+          <View style={[styles.searchBar, { marginTop: insets.top + 60 }]}>
+            <Ionicons name="search" size={18} color={colors.textMuted} />
+            <AppTextInput
+              style={styles.searchInput}
+              value={query}
+              onChangeText={handleQueryChange}
+              onFocus={() => setShowSuggestions(true)}
+              placeholder="Rechercher une adresse…"
+              autoCapitalize="words"
+              returnKeyType="search"
+            />
+            {searching ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : query.length > 0 ? (
+              <Pressable onPress={() => handleQueryChange('')} hitSlop={8}>
+                <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+        ) : (
+          /* Saisie manuelle (mode texte) */
+          <View style={[styles.manualBar, { marginTop: insets.top + 60 }]}>
+            <Ionicons name="create-outline" size={18} color={colors.primary} />
+            <AppTextInput
+              style={styles.manualInput}
+              value={address}
+              onChangeText={(t) => {
+                setAddress(t);
+                setQuery(t);
+              }}
+              placeholder="Saisissez votre adresse…"
+              autoCapitalize="words"
+              multiline
+            />
+            {address.length > 0 ? (
+              <Pressable
+                onPress={() => {
+                  setAddress('');
+                  setQuery('');
+                }}
+                hitSlop={8}
+              >
+                <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+              </Pressable>
+            ) : null}
+          </View>
+        )}
+
+        {/* Bascule carte / saisie manuelle */}
+        <View style={[styles.modeToggle, { marginTop: insets.top + 116 }]}>
+          <Pressable
+            style={[styles.modeBtn, mode === 'map' && styles.modeBtnActive]}
+            onPress={() => switchMode('map')}
+          >
+            <Ionicons
+              name="map-outline"
+              size={15}
+              color={mode === 'map' ? '#fff' : colors.textMuted}
+            />
+            <Text style={[styles.modeBtnText, mode === 'map' && styles.modeBtnTextActive]}>
+              Sur la carte
+            </Text>
+          </Pressable>
+          <Pressable
+            style={[styles.modeBtn, mode === 'manual' && styles.modeBtnActive]}
+            onPress={() => switchMode('manual')}
+          >
+            <Ionicons
+              name="create-outline"
+              size={15}
+              color={mode === 'manual' ? '#fff' : colors.textMuted}
+            />
+            <Text style={[styles.modeBtnText, mode === 'manual' && styles.modeBtnTextActive]}>
+              Saisie manuelle
+            </Text>
+          </Pressable>
         </View>
 
-        {/* Suggestions */}
-        {showSuggestions && query.trim().length >= 2 ? (
-          <View style={[styles.suggestionsCard, { marginTop: insets.top + 112 }]}>
+        {/* Suggestions (mode carte) */}
+        {mode === 'map' && showSuggestions && query.trim().length >= 2 ? (
+          <View style={[styles.suggestionsCard, { marginTop: insets.top + 170 }]}>
             {suggestions.length === 0 && !searching ? (
               <View style={styles.noResult}>
                 <Ionicons name="map-outline" size={18} color={colors.textMuted} />
@@ -387,37 +507,60 @@ export default function AddressPickerModal({
           </View>
         ) : null}
 
-        {/* Bouton ma position */}
-        <Pressable
-          style={[styles.locateBtn, { top: insets.top + 108 }]}
-          onPress={locateMe}
-          disabled={locating}
-        >
-          <Ionicons name={locating ? 'sync' : 'locate'} size={20} color={colors.primary} />
-        </Pressable>
+        {/* Bouton ma position (mode carte) */}
+        {mode === 'map' ? (
+          <Pressable
+            style={[styles.locateBtn, { top: insets.top + 164 }]}
+            onPress={locateMe}
+            disabled={locating}
+          >
+            <Ionicons name={locating ? 'sync' : 'locate'} size={20} color={colors.primary} />
+          </Pressable>
+        ) : null}
 
-        {/* Carte carte : adresse + confirmer */}
+        {/* Carte basse : adresse + confirmer */}
         <View style={[styles.bottomCard, { paddingBottom: insets.bottom + 16 }]}>
           <View style={styles.pinHint}>
-            <Ionicons name="navigate" size={15} color={colors.primary} />
-            <Text style={styles.pinHintText}>Déplace la carte pour ajuster l'adresse</Text>
+            <Ionicons
+              name={mode === 'map' ? 'navigate' : 'create-outline'}
+              size={15}
+              color={colors.primary}
+            />
+            <Text style={styles.pinHintText}>
+              {mode === 'map'
+                ? "Déplace la carte pour ajuster l'adresse"
+                : "Saisissez l'adresse ci-dessus puis confirmez"}
+            </Text>
           </View>
 
-          <View style={styles.addressRow}>
-            <View style={styles.addressIcon}>
-              <Ionicons name="home-outline" size={20} color={colors.primary} />
+          {mode === 'map' ? (
+            <View style={styles.addressRow}>
+              <View style={styles.addressIcon}>
+                <Ionicons name="home-outline" size={20} color={colors.primary} />
+              </View>
+              <View style={styles.addressBody}>
+                {resolving ? (
+                  <View style={styles.resolvingRow}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.resolvingText}>Adresse en cours…</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.addressText}>{address || 'Aucune adresse sélectionnée'}</Text>
+                )}
+              </View>
             </View>
-            <View style={styles.addressBody}>
-              {resolving ? (
-                <View style={styles.resolvingRow}>
-                  <ActivityIndicator size="small" color={colors.primary} />
-                  <Text style={styles.resolvingText}>Adresse en cours…</Text>
-                </View>
-              ) : (
-                <Text style={styles.addressText}>{address || 'Aucune adresse sélectionnée'}</Text>
-              )}
+          ) : (
+            <View style={styles.manualPreview}>
+              <View style={styles.addressIcon}>
+                <Ionicons name="create-outline" size={20} color={colors.secondary} />
+              </View>
+              <View style={styles.addressBody}>
+                <Text style={styles.addressText}>
+                  {address || 'Aucune adresse saisie'}
+                </Text>
+              </View>
             </View>
-          </View>
+          )}
 
           <Pressable
             style={[styles.confirmBtn, address.trim().length === 0 && styles.confirmBtnDisabled]}
@@ -480,6 +623,71 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.text,
     paddingVertical: 0,
+  },
+  manualBar: {
+    position: 'absolute',
+    left: spacing.md,
+    right: 64,
+    zIndex: 30,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 52,
+    ...shadows.md,
+  },
+  manualInput: {
+    flex: 1,
+    fontFamily: fonts.bodyMedium,
+    fontSize: 14,
+    color: colors.text,
+    paddingVertical: 0,
+    textAlignVertical: 'top',
+    maxHeight: 96,
+  },
+  modeToggle: {
+    position: 'absolute',
+    left: spacing.md,
+    right: 64,
+    zIndex: 25,
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.full,
+    padding: 3,
+    gap: 4,
+    ...shadows.sm,
+  },
+  modeBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: radius.full,
+  },
+  modeBtnActive: {
+    backgroundColor: colors.primary,
+  },
+  modeBtnText: {
+    fontFamily: fonts.bodyBold,
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  modeBtnTextActive: {
+    color: '#fff',
+  },
+  manualPreview: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    backgroundColor: colors.background,
+    borderRadius: radius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
   suggestionsCard: {
     position: 'absolute',

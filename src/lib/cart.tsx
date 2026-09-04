@@ -2,11 +2,16 @@ import React, {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { MenuItemModel } from '../graphql/types';
+
+const CART_STORAGE_KEY = 'biso_cart_v1';
 
 export type CartSupplement = {
   id?: string;
@@ -70,6 +75,34 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 export function CartProvider({ children }: { children: ReactNode }) {
   const [cart, setCart] = useState<CartInfo>(emptyCart);
+  const hydratedRef = useRef(false);
+
+  // Restaure le panier depuis le stockage local au démarrage.
+  useEffect(() => {
+    AsyncStorage.getItem(CART_STORAGE_KEY)
+      .then((raw) => {
+        if (raw) {
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.lines)) {
+              setCart(parsed);
+            }
+          } catch {
+            // Ignore un cache corrompu.
+          }
+        }
+        hydratedRef.current = true;
+      })
+      .catch(() => {
+        hydratedRef.current = true;
+      });
+  }, []);
+
+  // Persiste le panier à chaque modification (après hydratation initiale).
+  useEffect(() => {
+    if (!hydratedRef.current) return;
+    AsyncStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart)).catch(() => {});
+  }, [cart]);
 
   const addItem = useCallback(
     (

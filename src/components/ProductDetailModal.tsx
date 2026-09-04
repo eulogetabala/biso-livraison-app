@@ -31,7 +31,6 @@ type Props = {
   name: string;
   description?: string | null;
   price: number;
-  badge?: string;
   categoryLabel?: string;
   seller?: string;
   supplements?: ProductSupplement[];
@@ -46,7 +45,6 @@ export default function ProductDetailModal({
   name,
   description,
   price,
-  badge,
   categoryLabel,
   seller,
   supplements = [],
@@ -94,6 +92,7 @@ export default function ProductDetailModal({
     const item: FavoriteItem = {
       id,
       name,
+      kind: 'product',
       price,
       imageUrl,
       seller,
@@ -142,12 +141,6 @@ export default function ProductDetailModal({
                   color={favorited ? '#fff' : '#fff'}
                 />
               </Pressable>
-
-              {badge ? (
-                <View style={styles.badge}>
-                  <Text style={styles.badgeText}>{badge}</Text>
-                </View>
-              ) : null}
             </View>
 
             {/* Details */}
@@ -321,20 +314,6 @@ const styles = StyleSheet.create({
   },
   heartBtnActive: {
     backgroundColor: colors.primary,
-  },
-  badge: {
-    position: 'absolute',
-    bottom: 12,
-    left: 12,
-    backgroundColor: colors.primary,
-    borderRadius: radius.full,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  badgeText: {
-    color: '#fff',
-    fontFamily: fonts.bodyBold,
-    fontSize: 11,
   },
   body: {
     paddingHorizontal: spacing.lg,

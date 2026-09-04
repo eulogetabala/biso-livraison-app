@@ -7,7 +7,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   Pressable,
   Dimensions,
@@ -17,9 +16,15 @@ import * as Haptics from 'expo-haptics';
 import { useAuth } from '../lib/auth';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
+import { AppTextInput } from '../components/AppTextInput';
 import { Ionicons } from '@expo/vector-icons';
-import { MOCK_MODE } from '../config/mock';
-import { mockRegister, mockRequestOtp, mockVerifyOtp } from '../mocks/service';
+import {
+  useLoginMutation,
+  useRegisterMutation,
+  useRequestOtpMutation,
+  useVerifyOtpMutation,
+} from '../graphql/operations';
+import { getGraphqlErrorMessage, isUniqueConstraintError } from '../lib/graphql-errors';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -35,10 +40,13 @@ export default function OtpScreen({ navigation, route }: Props) {
 
   const [code, setCode] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [devCode, setDevCode] = useState<string | null>(null);
   const [countdown, setCountdown] = useState(0);
   const [verifying, setVerifying] = useState(false);
   const [resending, setResending] = useState(false);
+  const [requestOtp] = useRequestOtpMutation();
+  const [verifyOtp] = useVerifyOtpMutation();
+  const [register] = useRegisterMutation();
+  const [login] = useLoginMutation();
 
   const cardScale = useRef(new Animated.Value(0.92)).current;
   const cardOpacity = useRef(new Animated.Value(0)).current;
@@ -62,13 +70,6 @@ export default function OtpScreen({ navigation, route }: Props) {
   }, [cardScale, cardOpacity, cardTranslateY, logoScale, logoOpacity]);
 
   useEffect(() => {
-    if (MOCK_MODE) {
-      sendCode();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
     if (countdown <= 0) return;
     const t = setTimeout(() => setCountdown((c) => c - 1), 1000);
     return () => clearTimeout(t);
@@ -84,8 +85,7 @@ export default function OtpScreen({ navigation, route }: Props) {
   const sendCode = async () => {
     setError(null);
     try {
-      const result = await mockRequestOtp(phone);
-      setDevCode(result.devCode);
+      await requestOtp({ variables: { input: { phone } } });
       setCountdown(30);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -102,20 +102,52 @@ export default function OtpScreen({ navigation, route }: Props) {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setVerifying(true);
     try {
-      await mockVerifyOtp(phone, code);
-      const result = await mockRegister({ firstName, lastName, phone, password });
-      await setTokenAndUser(result.accessToken, result.user);
+      const { data: verifyData } = await verifyOtp({
+        variables: { input: { phone, code } },
+      });
+      if (!verifyData?.verifyOtp) throw new Error('Code invalide.');
+
+      try {
+        const { data: regData } = await register({
+          variables: {
+            input: {
+              firstName,
+              lastName,
+              phone,
+              password,
+              phoneVerified: true,
+            },
+          },
+        });
+        if (!regData?.createUser) throw new Error('Inscription impossible.');
+      } catch (registerErr) {
+        // Le numéro existe déjà (compte créé lors d'un essai précédent) :
+        // on enchaîne directement sur la connexion.
+        if (!isUniqueConstraintError(registerErr)) throw registerErr;
+      }
+
+      const { data: loginData } = await login({
+        variables: { input: { phone, password } },
+      });
+      if (!loginData?.login) throw new Error('Réponse invalide du serveur.');
+
+      await setTokenAndUser(loginData.login.accessToken, loginData.login.user);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       navigation.replace('Main');
     } catch (e) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message =
-        e instanceof Error && e.message.toLowerCase().includes('expir')
+      const message = getGraphqlErrorMessage(e, '').toLowerCase();
+      setError(
+        message.includes('expir')
           ? 'Ce code a expiré. Renvoyez un nouveau code.'
-          : e instanceof Error && e.message.toLowerCase().includes('invalide')
+          : message.includes('invalide')
             ? 'Code invalide. Vérifiez le code reçu.'
-            : 'Vérification impossible. Réessayez.';
-      setError(message);
+            : message.includes('unique') || message.includes('déjà utilisé')
+              ? 'Ce numéro est déjà utilisé. Connectez-vous.'
+              : message.includes('network') || message.includes('serveur') || message.includes('fetch')
+                ? 'Impossible de joindre le serveur. Vérifiez votre connexion.'
+                : getGraphqlErrorMessage(e, 'Vérification impossible. Réessayez.'),
+      );
     } finally {
       setVerifying(false);
     }
@@ -166,27 +198,18 @@ export default function OtpScreen({ navigation, route }: Props) {
             },
           ]}
         >
-          {MOCK_MODE && devCode ? (
-            <View style={styles.devBanner}>
-              <Ionicons name="flask-outline" size={16} color={colors.primary} />
-              <Text style={styles.devBannerText}>
-                Mode démo — votre code : <Text style={styles.devCode}>{devCode}</Text>
-              </Text>
-            </View>
-          ) : null}
-
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Code de vérification</Text>
             <Animated.View style={[styles.inputWrapper, { borderColor: makeBorder(codeFocus) }]}>
               <View style={styles.inputIconCircle}>
                 <Ionicons name="keypad-outline" size={16} color={colors.primary} />
               </View>
-              <TextInput
+              <AppTextInput
                 style={styles.input}
+                typedLetterSpacing={8}
                 value={code}
                 onChangeText={(t) => setCode(t.replace(/[^\d]/g, '').slice(0, CODE_LENGTH))}
                 placeholder="••••••"
-                placeholderTextColor={colors.textMuted}
                 keyboardType="number-pad"
                 maxLength={CODE_LENGTH}
                 autoFocus
@@ -321,25 +344,6 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     ...shadows.lg,
   },
-  devBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: colors.primaryLight,
-    borderRadius: radius.sm,
-    padding: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  devBannerText: {
-    color: colors.primaryDark,
-    fontSize: 13,
-    fontFamily: fonts.bodyMedium,
-    flex: 1,
-  },
-  devCode: {
-    fontFamily: fonts.titleBold,
-    letterSpacing: 2,
-  },
   inputGroup: {
     marginBottom: spacing.md,
   },
@@ -373,7 +377,6 @@ const styles = StyleSheet.create({
   input: {
     flex: 1,
     fontSize: 20,
-    letterSpacing: 8,
     color: colors.text,
     fontFamily: fonts.titleSemiBold,
     height: '100%',

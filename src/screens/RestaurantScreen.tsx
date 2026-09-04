@@ -17,15 +17,17 @@ import { useMenuItemsByRestaurantQuery, useRestaurantQuery } from '../graphql/op
 import type { MenuItemModel, MenuItemCategory } from '../graphql/types';
 import { assetUrl } from '../lib/api';
 import { useCart } from '../lib/cart';
-import { MOCK_MODE } from '../config/mock';
-import { getMockMenuByRestaurant, getMockRestaurantById } from '../mocks/service';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { TAB_BAR_OFFSET } from '../components/AppTabBar';
-import { computeDeliveryFee } from '../lib/pricing';
+import { restaurantDistanceKm } from '../lib/geo-data';
+import { useUserLocation } from '../lib/user-location';
 import { formatPrice, Spinner } from '../components/ui';
 import ProductDetailModal from '../components/ProductDetailModal';
+import OpenClosedBadge from '../components/OpenClosedBadge';
 import PhoneNumber from '../components/PhoneNumber';
+import { useFavorites } from '../lib/favorites';
 import type { CartSupplement } from '../lib/cart';
+import { formatCuisineDisplay } from '../lib/cuisine-display';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
 
@@ -47,14 +49,14 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 /** Regroupe les catégories du menu en onglets "grand public". */
-const MENU_GROUPS: { key: string; label: string; emoji: string; categories: MenuItemCategory[] }[] = [
-  { key: 'repas', label: 'Repas', emoji: '🍽️', categories: ['MAIN_COURSE', 'SIDE'] },
-  { key: 'dejeuner', label: 'Déjeuner', emoji: '🍱', categories: ['LUNCH'] },
-  { key: 'entrees', label: 'Entrées', emoji: '🥗', categories: ['APPETIZER'] },
-  { key: 'boissons', label: 'Boissons', emoji: '🥤', categories: ['DRINK'] },
-  { key: 'desserts', label: 'Desserts', emoji: '🧁', categories: ['DESSERT'] },
-  { key: 'fruits', label: 'Fruits', emoji: '🍎', categories: ['FRUIT'] },
-  { key: 'snacks', label: 'Snacks', emoji: '🍿', categories: ['SNACK'] },
+const MENU_GROUPS: { key: string; label: string; icon: string; categories: MenuItemCategory[] }[] = [
+  { key: 'repas', label: 'Repas', icon: 'restaurant-outline', categories: ['MAIN_COURSE'] },
+  { key: 'dejeuner', label: 'Déjeuner', icon: 'sunny-outline', categories: ['LUNCH'] },
+  { key: 'entrees', label: 'Entrées', icon: 'leaf-outline', categories: ['APPETIZER'] },
+  { key: 'boissons', label: 'Boissons', icon: 'wine-outline', categories: ['DRINK'] },
+  { key: 'desserts', label: 'Desserts', icon: 'ice-cream-outline', categories: ['DESSERT'] },
+  { key: 'fruits', label: 'Fruits', icon: 'nutrition-outline', categories: ['FRUIT'] },
+  { key: 'snacks', label: 'Snacks', icon: 'pizza-outline', categories: ['SNACK'] },
 ];
 
 export default function RestaurantScreen({ navigation, route }: Props) {
@@ -62,28 +64,24 @@ export default function RestaurantScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { data: restaurantData, loading: restaurantLoading } = useRestaurantQuery({
     variables: { id },
-    skip: MOCK_MODE,
   });
   const { data: menuData, loading: menuLoading } = useMenuItemsByRestaurantQuery({
     variables: { restaurantId: id, page: 1, limit: 50 },
-    skip: MOCK_MODE,
   });
 
-  const restaurant = MOCK_MODE ? getMockRestaurantById(String(id)) : restaurantData?.restaurant;
-  const items = MOCK_MODE ? getMockMenuByRestaurant(String(id)) : menuData?.menuItemsByRestaurant.items ?? [];
+  const restaurant = restaurantData?.restaurant;
+  const items = menuData?.menuItemsByRestaurant.items ?? [];
   const { addItem, count, total } = useCart();
+  const { coords: userCoords } = useUserLocation();
+  const { isFavoriteRestaurant, toggleFavoriteRestaurant } = useFavorites();
 
-  // Distance simulée du restaurant par rapport à l'utilisateur.
-  const restaurantDistance = useMemo(() => {
-    const distances: Record<string, number> = {
-      'rest-1': 1.2,
-      'rest-2': 2.4,
-      'rest-3': 3.8,
-      'rest-4': 4.3,
-      'rest-5': 5.1,
-    };
-    return distances[String(id)] ?? 1.8;
-  }, [id]);
+  const restaurantDistance = useMemo(
+    () => restaurantDistanceKm(userCoords, restaurant),
+    [restaurant, userCoords],
+  );
+
+  const estimatedTime = restaurant?.estimatedDeliveryTime ?? 30;
+  const deliveryFee = restaurant?.deliveryFee ?? 0;
 
   // Regroupe les items par groupe de menu (Repas, Boissons, ...)
   const groups = useMemo(() => {
@@ -130,23 +128,21 @@ export default function RestaurantScreen({ navigation, route }: Props) {
 
   const handleAdd = useCallback(
     (menuItem: MenuItemModel) => {
-      if (restaurant) {
+      if (restaurant?.isActive) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        addItem(menuItem, restaurant.id, restaurant.name, computeDeliveryFee(restaurantDistance));
+        addItem(menuItem, restaurant.id, restaurant.name, deliveryFee);
       }
     },
-    [restaurant, restaurantDistance, addItem],
+    [restaurant, deliveryFee, addItem],
   );
 
-  // Suppléments proposés par le resto (accompagnements SIDE) pour l'item sélectionné.
+  // Suppléments liés au plat (API), affichés dans le modal.
   const selectedSupplements = useMemo(
     () =>
       selectedItem
-        ? items.filter(
-            (item) => item.isAvailable && item.category === 'SIDE' && item.id !== selectedItem.id,
-          )
+        ? (selectedItem.supplements ?? []).filter((supplement) => supplement.isAvailable)
         : [],
-    [items, selectedItem],
+    [selectedItem],
   );
 
   const showSupplements =
@@ -159,16 +155,26 @@ export default function RestaurantScreen({ navigation, route }: Props) {
 
   const handleModalAdd = useCallback(
     (quantity: number, supplements: CartSupplement[]) => {
-      if (restaurant && selectedItem) {
+      if (restaurant && restaurant.isActive && selectedItem) {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        addItem(selectedItem, restaurant.id, restaurant.name, computeDeliveryFee(restaurantDistance), supplements, quantity);
+        addItem(selectedItem, restaurant.id, restaurant.name, deliveryFee, supplements, quantity);
         setSelectedItem(null);
       }
     },
-    [restaurant, selectedItem, restaurantDistance, addItem],
+    [restaurant, selectedItem, deliveryFee, addItem],
   );
 
-  if ((!MOCK_MODE && restaurantLoading) || (!MOCK_MODE && menuLoading)) return <Spinner />;
+  const isOpen = restaurant?.isActive ?? true;
+
+  const isFavorited = restaurant ? isFavoriteRestaurant(restaurant.id) : false;
+
+  const handleToggleFavorite = useCallback(() => {
+    if (!restaurant) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    toggleFavoriteRestaurant(restaurant);
+  }, [restaurant, toggleFavoriteRestaurant]);
+
+  if (restaurantLoading || menuLoading) return <Spinner />;
 
   const coverUrl = assetUrl(restaurant?.coverImageUrl ?? restaurant?.imageUrl);
 
@@ -230,6 +236,17 @@ export default function RestaurantScreen({ navigation, route }: Props) {
               <Ionicons name="chevron-back" size={22} color="#fff" />
             </View>
           </Pressable>
+
+          {/* Favorite button */}
+          <Pressable style={[styles.heartButton, { top: insets.top + 8 }]} onPress={handleToggleFavorite} hitSlop={8}>
+            <View style={[styles.heartButtonInner, isFavorited && styles.heartButtonActive]}>
+              <Ionicons
+                name={isFavorited ? 'heart' : 'heart-outline'}
+                size={20}
+                color={isFavorited ? '#fff' : '#fff'}
+              />
+            </View>
+          </Pressable>
         </View>
 
         {/* Floating info card */}
@@ -238,6 +255,7 @@ export default function RestaurantScreen({ navigation, route }: Props) {
             <Text style={styles.restaurantName} numberOfLines={2}>
               {restaurant?.name ?? route.params.name}
             </Text>
+            <OpenClosedBadge isOpen={isOpen} />
             {restaurant?.rating ? (
               <View style={styles.ratingBadge}>
                 <Ionicons name="star" size={13} color="#fff" />
@@ -247,7 +265,14 @@ export default function RestaurantScreen({ navigation, route }: Props) {
           </View>
 
           {restaurant?.cuisineType ? (
-            <Text style={styles.cuisineText}>{restaurant.cuisineType}</Text>
+            <Text style={styles.cuisineText}>{formatCuisineDisplay(restaurant.cuisineType)}</Text>
+          ) : null}
+
+          {!isOpen ? (
+            <View style={styles.closedBanner}>
+              <Ionicons name="time-outline" size={16} color="#B91C1C" />
+              <Text style={styles.closedBannerText}>Ce restaurant est fermé pour le moment.</Text>
+            </View>
           ) : null}
 
           {restaurant?.description ? (
@@ -289,7 +314,12 @@ export default function RestaurantScreen({ navigation, route }: Props) {
             </View>
             <View style={styles.infoBody}>
               <Text style={styles.infoLabel}>Distance</Text>
-              <Text style={styles.infoValue}>{restaurantDistance} de chez vous</Text>
+              <Text style={styles.infoValue}>
+                {restaurantDistance != null
+                  ? `${restaurantDistance.toFixed(1)} km · `
+                  : ''}
+                ~{estimatedTime} min de chez vous
+              </Text>
             </View>
           </View>
         </View>
@@ -313,7 +343,13 @@ export default function RestaurantScreen({ navigation, route }: Props) {
                       setActiveGroupKey(group.key);
                     }}
                   >
-                    <Text style={styles.groupChipEmoji}>{group.emoji}</Text>
+                    <View style={[styles.groupChipIcon, active && styles.groupChipIconActive]}>
+                      <Ionicons
+                        name={group.icon as any}
+                        size={15}
+                        color={active ? '#fff' : colors.primary}
+                      />
+                    </View>
                     <Text style={[styles.groupChipLabel, active && styles.groupChipLabelActive]}>
                       {group.label}
                     </Text>
@@ -330,9 +366,10 @@ export default function RestaurantScreen({ navigation, route }: Props) {
             {activeGroup ? (
               <View style={styles.groupItems}>
                 <View style={styles.groupTitleRow}>
-                  <Text style={styles.groupTitle}>
-                    {activeGroup.emoji} {activeGroup.label}
-                  </Text>
+                  <View style={styles.groupTitleIcon}>
+                    <Ionicons name={activeGroup.icon as any} size={17} color={colors.primary} />
+                  </View>
+                  <Text style={styles.groupTitle}>{activeGroup.label}</Text>
                   <Text style={styles.groupCount}>{activeGroup.items.length} produits</Text>
                 </View>
                 {activeGroup.items.map((menuItem) => (
@@ -354,6 +391,7 @@ export default function RestaurantScreen({ navigation, route }: Props) {
       </Animated.ScrollView>
 
       {/* Cart bar */}
+      {isOpen && count > 0 ? (
       <Animated.View
         style={[styles.cartBarWrapper, { transform: [{ translateY: cartTranslateY }] }]}
       >
@@ -380,6 +418,7 @@ export default function RestaurantScreen({ navigation, route }: Props) {
           </LinearGradient>
         </Pressable>
       </Animated.View>
+      ) : null}
 
       {/* Fiche produit */}
       <ProductDetailModal
@@ -506,6 +545,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  heartButton: {
+    position: 'absolute',
+    right: spacing.md,
+    zIndex: 10,
+  },
+  heartButtonInner: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  heartButtonActive: {
+    backgroundColor: colors.primary,
+  },
 
   // Floating card
   floatingCard: {
@@ -553,6 +608,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
     marginTop: 6,
+  },
+  closedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: spacing.sm,
+    padding: spacing.sm,
+    backgroundColor: '#FEE2E2',
+    borderRadius: radius.md,
+  },
+  closedBannerText: {
+    flex: 1,
+    color: '#B91C1C',
+    fontFamily: fonts.bodyMedium,
+    fontSize: 13,
   },
   descriptionText: {
     fontSize: 12,
@@ -621,8 +691,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.secondary,
     borderColor: colors.secondary,
   },
-  groupChipEmoji: {
-    fontSize: 15,
+  groupChipIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  groupChipIconActive: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
   },
   groupChipLabel: {
     color: colors.secondary,
@@ -662,11 +740,21 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: spacing.md,
   },
+  groupTitleIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.primaryLight,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
   groupTitle: {
     fontSize: 16,
     fontFamily: fonts.titleBold,
     fontWeight: '700',
     color: colors.secondary,
+    flex: 1,
   },
   groupCount: {
     fontSize: 11,

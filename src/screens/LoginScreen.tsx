@@ -7,7 +7,6 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
   Pressable,
   Dimensions,
@@ -16,11 +15,11 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useLoginMutation } from '../graphql/operations';
 import { useAuth } from '../lib/auth';
+import { getGraphqlErrorMessage } from '../lib/graphql-errors';
 import { colors, radius, spacing, fonts, shadows } from '../theme';
 import { Button } from '../components/ui';
+import { AppTextInput } from '../components/AppTextInput';
 import PhoneInput from '../components/PhoneInput';
-import { MOCK_MODE } from '../config/mock';
-import { mockLogin } from '../mocks/service';
 import { Ionicons } from '@expo/vector-icons';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -73,16 +72,9 @@ export default function LoginScreen({ navigation }: Props) {
     }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     try {
-      if (MOCK_MODE) {
-        const result = await mockLogin(`${countryCode}${phone}`.replace(/\s+/g, ''), password);
-        await setTokenAndUser(result.accessToken, result.user);
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        navigation.replace('Main');
-        return;
-      }
       const { data } = await login({
         variables: {
-          input: { email: `${countryCode}${phone}`.replace(/\s+/g, '') + '@phone.biso', password },
+          input: { phone: `${countryCode}${phone}`.replace(/\s+/g, ''), password },
         },
       });
       if (!data?.login) throw new Error('Réponse invalide du serveur.');
@@ -91,11 +83,14 @@ export default function LoginScreen({ navigation }: Props) {
       navigation.replace('Main');
     } catch (e) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      const message =
-        e instanceof Error && e.message.includes('Invalid credentials')
+      const message = getGraphqlErrorMessage(e, '');
+      setError(
+        message.includes('Invalid credentials') || message.toLowerCase().includes('incorrect')
           ? 'Numéro ou mot de passe incorrect.'
-          : 'Connexion impossible. Vérifiez votre connexion et réessayez.';
-      setError(message);
+          : message.includes('serveur') || message.includes('Network')
+            ? 'Impossible de joindre le serveur. Vérifiez votre connexion.'
+            : message || 'Connexion impossible. Réessayez.',
+      );
     }
   };
 
@@ -153,14 +148,13 @@ export default function LoginScreen({ navigation }: Props) {
             <Text style={styles.label}>Numéro de téléphone</Text>
             <Animated.View style={[styles.inputWrapper, { borderColor: phoneBorderColor }]}>
               <View style={styles.inputIconCircle}>
-                <Ionicons name="call-outline" size={16} color={colors.primary} />
+                <Ionicons name="call-outline" size={14} color={colors.primary} />
               </View>
               <PhoneInput
                 value={phone}
                 countryCode={countryCode}
                 onChange={setPhone}
                 onCountryChange={setCountryCode}
-                placeholder="06 XXX XX XX"
                 onFocus={() => animateInput(phoneFocusAnim, 1)}
                 onBlur={() => animateInput(phoneFocusAnim, 0)}
               />
@@ -172,14 +166,12 @@ export default function LoginScreen({ navigation }: Props) {
             <Text style={styles.label}>Mot de passe</Text>
             <Animated.View style={[styles.inputWrapper, { borderColor: passwordBorderColor }]}>
               <View style={styles.inputIconCircle}>
-                <Ionicons name="lock-closed-outline" size={16} color={colors.primary} />
+                <Ionicons name="lock-closed-outline" size={14} color={colors.primary} />
               </View>
-              <TextInput
+              <AppTextInput
                 style={styles.input}
                 value={password}
                 onChangeText={setPassword}
-                placeholder="••••••••"
-                placeholderTextColor={colors.textMuted}
                 secureTextEntry={!showPassword}
                 autoComplete="password"
                 onFocus={() => animateInput(passwordFocusAnim, 1)}
@@ -193,6 +185,13 @@ export default function LoginScreen({ navigation }: Props) {
                 />
               </Pressable>
             </Animated.View>
+            <Pressable
+              style={styles.forgotLink}
+              onPress={() => navigation.navigate('ForgotPassword')}
+              hitSlop={8}
+            >
+              <Text style={styles.forgotLinkText}>Mot de passe oublié ?</Text>
+            </Pressable>
           </View>
 
           {error ? (
@@ -333,26 +332,27 @@ const styles = StyleSheet.create({
   },
   inputWrapper: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
     borderWidth: 2,
     borderRadius: radius.md,
     backgroundColor: colors.primaryLight,
     paddingHorizontal: spacing.sm,
-    height: 56,
+    height: 52,
   },
   inputIconCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 8,
+    alignSelf: 'center',
+    marginRight: 6,
     ...shadows.sm,
   },
   input: {
     flex: 1,
-    fontSize: 16,
+    fontSize: 15,
     color: colors.text,
     fontFamily: fonts.bodyMedium,
     height: '100%',
@@ -361,6 +361,17 @@ const styles = StyleSheet.create({
   eyeBtn: {
     padding: 6,
     marginLeft: 4,
+    alignSelf: 'center',
+  },
+  forgotLink: {
+    alignSelf: 'flex-end',
+    marginTop: 8,
+    paddingVertical: 2,
+  },
+  forgotLinkText: {
+    fontSize: 13,
+    color: colors.primary,
+    fontFamily: fonts.titleSemiBold,
   },
   errorCard: {
     flexDirection: 'row',
