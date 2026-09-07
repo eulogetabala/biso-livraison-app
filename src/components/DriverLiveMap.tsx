@@ -10,34 +10,25 @@ export type LiveMapPoint = {
 };
 
 type Props = {
-  /** Coordonnées du restaurant (point de départ). */
   origin: LiveMapPoint | null;
-  /** Coordonnées de livraison (destination). */
   destination: LiveMapPoint | null;
-  /** Nom du livreur (affiché dans l'encart). */
   driverName?: string | null;
-  /** Position GPS actuelle du livreur (prioritaire sur progress). */
+  /** Position GPS réelle du livreur — absent tant que le backend n'a pas reçu de fix. */
   driverPosition?: LiveMapPoint | null;
-  /** Progression simulée du livreur, entre 0 et 1 (repli si driverPosition absent). */
-  progress?: number;
-  /** Statut affiché (ex. "En livraison"). */
   statusLabel?: string;
-  /** Temps estimé restant en minutes. */
   etaMinutes?: number;
-  /** Hauteur de la carte (défaut 220). */
   mapHeight?: number;
   onExpand?: () => void;
 };
 
 /**
- * Carte de suivi en temps réel : restaurant, destination et position du livreur.
+ * Carte de suivi : restaurant, destination et position live du livreur (sans simulation).
  */
 export default function DriverLiveMap({
   origin,
   destination,
   driverName,
   driverPosition,
-  progress = 0.4,
   statusLabel = 'En livraison',
   etaMinutes,
   mapHeight = 220,
@@ -45,36 +36,34 @@ export default function DriverLiveMap({
 }: Props) {
   const mapRef = useRef<MapView>(null);
   const [loaded, setLoaded] = useState(false);
-
-  const resolvedDriverPosition = useMemo(() => {
-    if (driverPosition) return driverPosition;
-    if (!origin || !destination) return null;
-    const p = Math.max(0, Math.min(1, progress));
-    return {
-      latitude: origin.latitude + (destination.latitude - origin.latitude) * p,
-      longitude: origin.longitude + (destination.longitude - origin.longitude) * p,
-    };
-  }, [driverPosition, origin, destination, progress]);
+  const isLive = driverPosition != null;
 
   const region = useMemo(() => {
-    const a = origin ?? destination;
-    const b = destination ?? origin;
-    if (!a || !b) return undefined;
+    const points = [origin, destination, driverPosition].filter(Boolean) as LiveMapPoint[];
+    if (points.length === 0) return undefined;
+    const lats = points.map((p) => p.latitude);
+    const lngs = points.map((p) => p.longitude);
+    const minLat = Math.min(...lats);
+    const maxLat = Math.max(...lats);
+    const minLng = Math.min(...lngs);
+    const maxLng = Math.max(...lngs);
     return {
-      latitude: (a.latitude + b.latitude) / 2,
-      longitude: (a.longitude + b.longitude) / 2,
-      latitudeDelta: Math.abs(a.latitude - b.latitude) * 1.9 + 0.02,
-      longitudeDelta: Math.abs(a.longitude - b.longitude) * 1.9 + 0.02,
+      latitude: (minLat + maxLat) / 2,
+      longitude: (minLng + maxLng) / 2,
+      latitudeDelta: Math.max((maxLat - minLat) * 1.8, 0.02),
+      longitudeDelta: Math.max((maxLng - minLng) * 1.8, 0.02),
     };
-  }, [origin, destination]);
+  }, [origin, destination, driverPosition]);
 
   useEffect(() => {
-    if (loaded && resolvedDriverPosition && mapRef.current) {
-      mapRef.current.animateCamera({ center: resolvedDriverPosition }, { duration: 800 });
+    if (!loaded || !mapRef.current) return;
+    const focus = driverPosition ?? origin ?? destination;
+    if (focus) {
+      mapRef.current.animateCamera({ center: focus }, { duration: 600 });
     }
-  }, [resolvedDriverPosition, loaded]);
+  }, [driverPosition, origin, destination, loaded]);
 
-  if (!origin || !destination || !resolvedDriverPosition) {
+  if (!origin || !destination) {
     return null;
   }
 
@@ -89,55 +78,74 @@ export default function DriverLiveMap({
         rotateEnabled={false}
         toolbarEnabled={false}
       >
-        {/* Restaurant */}
         <Marker coordinate={origin} anchor={{ x: 0.5, y: 0.5 }}>
           <View style={[styles.marker, styles.markerOrigin]}>
             <Ionicons name="storefront" size={14} color="#fff" />
           </View>
         </Marker>
 
-        {/* Livreur en mouvement */}
-        <Marker coordinate={resolvedDriverPosition} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges>
-          <View style={styles.driverPulse}>
-            <View style={[styles.marker, styles.markerDriver]}>
-              <Ionicons name="bicycle" size={16} color="#fff" />
+        {driverPosition ? (
+          <Marker coordinate={driverPosition} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false}>
+            <View style={styles.driverPulse}>
+              <View style={[styles.marker, styles.markerDriver]}>
+                <Ionicons name="bicycle" size={16} color="#fff" />
+              </View>
             </View>
-          </View>
-        </Marker>
+          </Marker>
+        ) : null}
 
-        {/* Destination */}
         <Marker coordinate={destination} anchor={{ x: 0.5, y: 0.5 }}>
           <View style={[styles.marker, styles.markerDestination]}>
             <Ionicons name="home" size={14} color="#fff" />
           </View>
         </Marker>
 
-        <Polyline
-          coordinates={[origin, resolvedDriverPosition]}
-          strokeColor={colors.primary}
-          strokeWidth={4}
-          lineDashPattern={[1, 6]}
-          lineCap="round"
-        />
-        <Polyline
-          coordinates={[resolvedDriverPosition, destination]}
-          strokeColor={colors.border}
-          strokeWidth={4}
-          lineDashPattern={[1, 6]}
-          lineCap="round"
-        />
+        {driverPosition ? (
+          <>
+            <Polyline
+              coordinates={[origin, driverPosition]}
+              strokeColor={colors.primary}
+              strokeWidth={4}
+              lineDashPattern={[1, 6]}
+              lineCap="round"
+            />
+            <Polyline
+              coordinates={[driverPosition, destination]}
+              strokeColor={colors.border}
+              strokeWidth={4}
+              lineDashPattern={[1, 6]}
+              lineCap="round"
+            />
+          </>
+        ) : (
+          <Polyline
+            coordinates={[origin, destination]}
+            strokeColor={colors.border}
+            strokeWidth={3}
+            lineDashPattern={[4, 8]}
+            lineCap="round"
+          />
+        )}
       </MapView>
 
-      {/* Encart livreur */}
+      {isLive ? (
+        <View style={styles.liveBadge}>
+          <View style={styles.liveDot} />
+          <Text style={styles.liveText}>Live</Text>
+        </View>
+      ) : null}
+
       <View style={styles.card}>
         <View style={styles.avatar}>
           <Ionicons name="bicycle" size={18} color={colors.secondary} />
         </View>
         <View style={styles.info}>
           <Text style={styles.driverName}>{driverName ?? 'Livreur en route'}</Text>
-          <Text style={styles.status}>{statusLabel}</Text>
+          <Text style={[styles.status, !isLive && styles.statusWaiting]}>
+            {isLive ? statusLabel : 'En attente de position GPS…'}
+          </Text>
         </View>
-        {etaMinutes != null ? (
+        {etaMinutes != null && isLive ? (
           <View style={styles.eta}>
             <Ionicons name="time-outline" size={13} color={colors.primary} />
             <Text style={styles.etaText}>{etaMinutes} min</Text>
@@ -183,6 +191,30 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  liveBadge: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.95)',
+    borderRadius: radius.full,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    ...shadows.sm,
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.success,
+  },
+  liveText: {
+    fontSize: 11,
+    fontFamily: fonts.bodyBold,
+    color: colors.success,
+  },
   card: {
     position: 'absolute',
     left: spacing.md,
@@ -215,6 +247,9 @@ const styles = StyleSheet.create({
     fontFamily: fonts.bodyMedium,
     color: colors.success,
     marginTop: 1,
+  },
+  statusWaiting: {
+    color: colors.textMuted,
   },
   eta: {
     flexDirection: 'row',

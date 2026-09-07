@@ -49,7 +49,7 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
   const insets = useSafeAreaInsets();
   const { data, loading, error, refetch } = useOrderQuery({
     variables: { id },
-    pollInterval: isConfirmation ? undefined : 5000,
+    pollInterval: isConfirmation ? undefined : 3000,
   });
   const order = data?.order;
   const hasDriver = !!order?.delivery?.driver;
@@ -63,7 +63,7 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
   const { data: trackData } = useTrackDeliveryQuery({
     variables: { orderId: id },
     skip: !trackable,
-    pollInterval: 5000,
+    pollInterval: 3000,
   });
   const [cancelOrder, { loading: cancelling }] = useCancelOrderMutation();
   const [cancelError, setCancelError] = useState<string | null>(null);
@@ -163,16 +163,6 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
     ? { latitude: trackData.trackDelivery.latitude, longitude: trackData.trackDelivery.longitude }
     : null;
   const deliveryStatus = order.delivery?.status;
-  const mapProgress =
-    deliveryStatus === 'IN_TRANSIT' || order.status === 'IN_TRANSIT'
-      ? 0.65
-      : deliveryStatus === 'PICKED_UP'
-        ? 0.45
-        : order.status === 'PREPARING'
-          ? 0.2
-          : order.status === 'CONFIRMED'
-            ? 0.08
-            : 0.4;
   const etaMinutes =
     driverCoords && destinationCoords
       ? Math.max(5, Math.round((distanceKmBetween(driverCoords, destinationCoords) / 18) * 60))
@@ -189,8 +179,7 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
           : order.status === 'CONFIRMED' || order.status === 'PENDING'
             ? 'Bientôt en route'
             : 'En livraison';
-  const showLiveMap =
-    trackable && !!originCoords && !!destinationCoords && (!!driverCoords || order.status !== 'PENDING');
+  const showLiveMap = trackable && !!originCoords && !!destinationCoords;
   const fullMapHeight = Dimensions.get('window').height - insets.top - insets.bottom - 48;
 
   if (isConfirmation) {
@@ -381,7 +370,6 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
               origin={originCoords}
               destination={destinationCoords}
               driverPosition={driverCoords}
-              progress={mapProgress}
               driverName={order.delivery?.driver?.firstName ? `${order.delivery.driver.firstName} ${order.delivery.driver.lastName ?? ''}` : 'Livreur'}
               statusLabel={statusLabel}
               etaMinutes={etaMinutes}
@@ -588,7 +576,6 @@ export default function OrderDetailScreen({ navigation, route }: Props) {
               origin={originCoords}
               destination={destinationCoords}
               driverPosition={driverCoords}
-              progress={mapProgress}
               driverName={order.delivery?.driver?.firstName ? `${order.delivery.driver.firstName} ${order.delivery.driver.lastName ?? ''}` : 'Livreur'}
               statusLabel={statusLabel}
               etaMinutes={etaMinutes}
