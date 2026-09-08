@@ -33,6 +33,7 @@ query ActiveCuisineTypes {
     value
     label
     emoji
+    iconUrl
     sortOrder
     isActive
   }

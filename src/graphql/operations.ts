@@ -73,7 +73,7 @@ export type ActiveMarketCategoriesQuery = { activeMarketCategories: Array<{ id: 
 export type ActiveCuisineTypesQueryVariables = Exact<{ [key: string]: never; }>;
 
 
-export type ActiveCuisineTypesQuery = { activeCuisineTypes: Array<{ id: string, value: string, label: string, emoji: string | null, sortOrder: number, isActive: boolean }> };
+export type ActiveCuisineTypesQuery = { activeCuisineTypes: Array<{ id: string, value: string, label: string, emoji: string | null, iconUrl: string | null, sortOrder: number, isActive: boolean }> };
 
 export type MarketRestaurantQueryVariables = Exact<{ [key: string]: never; }>;
 
@@ -645,6 +645,7 @@ export const ActiveCuisineTypesDocument = gql`
     value
     label
     emoji
+    iconUrl
     sortOrder
     isActive
   }
